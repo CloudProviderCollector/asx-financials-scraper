@@ -126,8 +126,7 @@ def test_daily_prices_show_chronological_charts_and_formatted_newest_first_table
     ]
     with (
         patch("asx_financials.dashboard.st.subheader"),
-        patch("asx_financials.dashboard.st.line_chart") as line_chart,
-        patch("asx_financials.dashboard.st.bar_chart") as bar_chart,
+        patch("asx_financials.dashboard.st.plotly_chart") as plotly_chart,
         patch("asx_financials.dashboard.st.dataframe") as dataframe,
     ):
         _daily_prices_view(
@@ -143,12 +142,17 @@ def test_daily_prices_show_chronological_charts_and_formatted_newest_first_table
             ],
         )
 
-    close = line_chart.call_args.args[0]
-    assert list(close.index) == [date(2026, 10, 27), date(2026, 10, 28)]
-    assert list(close["Close"]) == [1180.75, 1240.25]
-    assert list(close["Derived adjusted close"].dropna()) == [1170.75, 1240.25]
-    volume = bar_chart.call_args.args[0]
-    assert list(volume["Volume"]) == [900000, 1234567]
+    plotly_chart.assert_called_once()
+    figure = plotly_chart.call_args.args[0]
+    assert plotly_chart.call_args.kwargs["width"] == "stretch"
+    assert [trace.name for trace in figure.data] == ["Close", "Derived adjusted close", "Volume"]
+    assert list(figure.data[0].x) == [date(2026, 10, 27), date(2026, 10, 28)]
+    assert list(figure.data[0].y) == [1180.75, 1240.25]
+    assert list(figure.data[1].y) == [1170.75, 1240.25]
+    assert list(figure.data[2].y) == [900000, 1234567]
+    assert figure.data[0].yaxis == figure.data[1].yaxis == "y"
+    assert figure.data[2].yaxis == "y2"
+    assert figure.layout.xaxis.matches == "x2"
     rows = dataframe.call_args.args[0]
     assert rows.iloc[0]["open"] == "$1,234.50"
     assert rows.iloc[0]["adjusted_close"] == "N/A"
@@ -159,14 +163,12 @@ def test_daily_prices_show_chronological_charts_and_formatted_newest_first_table
 def test_daily_prices_empty_state_does_not_render_charts_or_table():
     with (
         patch("asx_financials.dashboard.st.info") as info,
-        patch("asx_financials.dashboard.st.line_chart") as line_chart,
-        patch("asx_financials.dashboard.st.bar_chart") as bar_chart,
+        patch("asx_financials.dashboard.st.plotly_chart") as plotly_chart,
         patch("asx_financials.dashboard.st.dataframe") as dataframe,
     ):
         _daily_prices_view([])
     info.assert_called_once()
-    line_chart.assert_not_called()
-    bar_chart.assert_not_called()
+    plotly_chart.assert_not_called()
     dataframe.assert_not_called()
 
 

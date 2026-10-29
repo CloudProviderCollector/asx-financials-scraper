@@ -7,7 +7,9 @@ from decimal import Decimal
 from typing import Any
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 from sqlalchemy import Engine, create_engine, select
 
 from asx_financials.config import get_settings
@@ -223,29 +225,42 @@ def _daily_prices_view(
         value = adjusted.get(day)
         return float(value) if value is not None else None
 
-    close = pd.DataFrame(
-        {
-            "Trading date": [row["trading_date"] for row in chronological],
-            "Close": [
-                float(row["close"]) if row["close"] is not None else None for row in chronological
-            ],
-            "Derived adjusted close": [
-                adjusted_float(row["trading_date"]) for row in chronological
-            ],
-        }
-    ).set_index("Trading date")
-    if close["Derived adjusted close"].isna().all():
-        close = close.drop(columns="Derived adjusted close")
-    st.subheader("Daily closing prices")
-    st.line_chart(close, y_label="Price ($)")
-    volume = pd.DataFrame(
-        {
-            "Trading date": [row["trading_date"] for row in chronological],
-            "Volume": [row["volume"] for row in chronological],
-        }
-    ).set_index("Trading date")
-    st.subheader("Daily trading volume")
-    st.bar_chart(volume, y_label="Shares")
+    days = [row["trading_date"] for row in chronological]
+    figure = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.04,
+        row_heights=[0.7, 0.3],
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=days,
+            y=[float(row["close"]) if row["close"] is not None else None for row in chronological],
+            name="Close",
+            mode="lines",
+        ),
+        row=1,
+        col=1,
+    )
+    derived = [adjusted_float(day) for day in days]
+    if any(value is not None for value in derived):
+        figure.add_trace(
+            go.Scatter(x=days, y=derived, name="Derived adjusted close", mode="lines"),
+            row=1,
+            col=1,
+        )
+    figure.add_trace(
+        go.Bar(x=days, y=[row["volume"] for row in chronological], name="Volume"),
+        row=2,
+        col=1,
+    )
+    figure.update_yaxes(title_text="Price ($)", row=1, col=1)
+    figure.update_yaxes(title_text="Shares", row=2, col=1)
+    figure.update_xaxes(title_text="Trading date", row=2, col=1)
+    figure.update_layout(hovermode="x unified", height=650)
+    st.subheader("Daily price and volume")
+    st.plotly_chart(figure, width="stretch")
     st.subheader("Daily OHLCV history")
     columns = (
         "trading_date",
