@@ -6,13 +6,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_env: str = Field(default="development", alias="APP_ENV")
-    mongodb_uri: str = Field(
-        default="mongodb://localhost:27017",
-        alias="MONGODB_URI",
-    )
-    mongodb_database: str = Field(
-        default="asx_financials",
-        alias="MONGODB_DATABASE",
+    database_url: str = Field(
+        default="postgresql+psycopg://asx_financials:asx_financials@localhost:5432/asx_financials",
+        alias="DATABASE_URL",
     )
     yahoo_request_timeout_seconds: int = Field(default=30, alias="YAHOO_REQUEST_TIMEOUT_SECONDS")
 

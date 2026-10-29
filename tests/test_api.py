@@ -25,6 +25,7 @@ class StubIngestionService:
             completed_at_utc=datetime(2026, 4, 24, tzinfo=UTC),
             inserted_snapshot_count=1,
             stored_raw_payload_count=1,
+            stored_price_bar_count=0,
             segment_failures=[],
             message="ok",
         )
@@ -83,7 +84,10 @@ class StubReadService(TickerReadService):
 
 
 def test_ingestion_endpoint_returns_success(monkeypatch) -> None:
-    monkeypatch.setenv("MONGODB_URI", "mongodb://localhost:27017")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://asx_financials:asx_financials@localhost:5432/asx_financials",
+    )
     get_settings.cache_clear()
     app = create_app()
     app.state.services = ServiceContainer(
@@ -100,7 +104,10 @@ def test_ingestion_endpoint_returns_success(monkeypatch) -> None:
 
 
 def test_company_endpoint_returns_company(monkeypatch) -> None:
-    monkeypatch.setenv("MONGODB_URI", "mongodb://localhost:27017")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://asx_financials:asx_financials@localhost:5432/asx_financials",
+    )
     get_settings.cache_clear()
     app = create_app()
     app.state.services = ServiceContainer(
@@ -117,7 +124,10 @@ def test_company_endpoint_returns_company(monkeypatch) -> None:
 
 
 def test_initialise_tickers_endpoint_returns_counts(monkeypatch) -> None:
-    monkeypatch.setenv("MONGODB_URI", "mongodb://localhost:27017")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://asx_financials:asx_financials@localhost:5432/asx_financials",
+    )
     get_settings.cache_clear()
     app = create_app()
     app.state.services = ServiceContainer(

@@ -68,10 +68,14 @@ class TickerIngestionService:
         )
 
         try:
+            latest_price_date = self._data_store.get_latest_price_date(ticker)
+            latest_action_date = self._data_store.get_latest_action_date(ticker)
             provider_result = self._data_provider.fetch(
                 ticker=ticker,
                 include_annual=command.include_annual,
                 include_quarterly=command.include_quarterly,
+                latest_price_date=latest_price_date,
+                latest_action_date=latest_action_date,
             )
 
             status = self._determine_status(provider_result)
@@ -87,6 +91,8 @@ class TickerIngestionService:
                 message=message,
                 company_profile=provider_result.company_profile,
                 statement_snapshots=provider_result.statement_snapshots,
+                daily_price_bars=provider_result.daily_price_bars,
+                corporate_actions=provider_result.corporate_actions,
                 raw_payloads=provider_result.raw_payloads,
                 segment_failures=provider_result.segment_failures,
             )
@@ -100,6 +106,7 @@ class TickerIngestionService:
                 completed_at_utc=completed_at_utc,
                 inserted_snapshot_count=persisted.inserted_snapshot_count,
                 stored_raw_payload_count=persisted.stored_raw_payload_count,
+                stored_price_bar_count=persisted.stored_price_bar_count,
                 segment_failures=provider_result.segment_failures,
                 message=message,
             )

@@ -1,19 +1,22 @@
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 
 import pytest
 
 from asx_financials.application.services import (
-    InitializeTickerUniverseCommand,
     IngestTickerCommand,
+    InitializeTickerUniverseCommand,
     TickerIngestionService,
     TickerUniverseInitializationService,
 )
 from asx_financials.domain.enums import IngestionRunStatus, StatementFrequency, StatementType
 from asx_financials.domain.models import (
-    CompanyProfileSnapshot,
     AsxListedCompaniesFetchResult,
     AsxListedCompany,
+    CompanyProfileSnapshot,
+    CorporateAction,
+    DailyPriceBar,
     FinancialStatementSnapshot,
     PersistedIngestionOutcome,
     ProviderFetchResult,
@@ -39,7 +42,11 @@ class StubProvider:
         ticker: AsxTicker,
         include_annual: bool,
         include_quarterly: bool,
+        latest_price_date: date | None = None,
+        latest_action_date: date | None = None,
     ) -> ProviderFetchResult:
+        self.latest_action_date = latest_action_date
+        self.latest_price_date = latest_price_date
         return self._result
 
 
@@ -61,6 +68,8 @@ class RecordingStore:
     def __init__(self) -> None:
         self.completions: list[dict[str, object]] = []
         self.ticker_syncs: list[dict[str, object]] = []
+        self.latest_price_date: date | None = None
+        self.latest_action_date: date | None = None
 
     def sync_ticker_universe(self, **kwargs):
         self.ticker_syncs.append(kwargs)
@@ -80,6 +89,7 @@ class RecordingStore:
         return PersistedIngestionOutcome(
             inserted_snapshot_count=len(kwargs["statement_snapshots"]),
             stored_raw_payload_count=len(kwargs["raw_payloads"]),
+            stored_price_bar_count=len(kwargs["daily_price_bars"]),
         )
 
     def mark_ingestion_run_failed(
@@ -89,6 +99,12 @@ class RecordingStore:
         message: str,
     ) -> None:
         return None
+
+    def get_latest_price_date(self, ticker: AsxTicker, exchange_code: str = "ASX"):
+        return self.latest_price_date
+
+    def get_latest_action_date(self, ticker: AsxTicker, exchange_code: str = "ASX"):
+        return self.latest_action_date
 
     def get_latest_ingestion(self, ticker: AsxTicker):
         return None
@@ -131,6 +147,19 @@ def make_provider_result() -> ProviderFetchResult:
                 fetched_at_utc=FIXED_NOW,
             )
         ],
+        daily_price_bars=[
+            DailyPriceBar(
+                trading_date=date(2026, 4, 23),
+                open=Decimal("42.50"),
+                high=Decimal("43"),
+                low=Decimal("42"),
+                close=Decimal("42.80"),
+                adjusted_close=None,
+                volume=123456,
+                source="yfinance",
+                fetched_at_utc=FIXED_NOW,
+            )
+        ],
         raw_payloads=[
             RawSourcePayload(
                 source_name="yfinance",
@@ -154,6 +183,32 @@ def test_ingest_returns_succeeded_for_full_success() -> None:
     assert result.status is IngestionRunStatus.SUCCEEDED
     assert result.inserted_snapshot_count == 1
     assert result.stored_raw_payload_count == 1
+    assert result.stored_price_bar_count == 1
+    assert store.completions[0]["daily_price_bars"] == make_provider_result().daily_price_bars
+
+
+def test_ingest_uses_latest_saved_day_and_accepts_price_only_data() -> None:
+    store = RecordingStore()
+    store.latest_price_date = date(2026, 4, 23)
+    provider = StubProvider(
+        replace(make_provider_result(), company_profile=None, statement_snapshots=[])
+    )
+    result = TickerIngestionService(provider, store, StubClock()).ingest(
+        IngestTickerCommand(ticker="BHP")
+    )
+    assert provider.latest_price_date == date(2026, 4, 23)
+    assert result.status is IngestionRunStatus.SUCCEEDED
+
+
+def test_ingest_persists_actions_on_incremental_price_fetch() -> None:
+    store = RecordingStore()
+    store.latest_price_date = date(2026, 4, 23)
+    store.latest_action_date = date(2026, 4, 20)
+    event = CorporateAction("dividend", date(2026, 4, 21), Decimal("2"), "yfinance", FIXED_NOW)
+    provider = StubProvider(replace(make_provider_result(), corporate_actions=[event]))
+    TickerIngestionService(provider, store, StubClock()).ingest(IngestTickerCommand(ticker="BHP"))
+    assert provider.latest_action_date == date(2026, 4, 20)
+    assert store.completions[0]["corporate_actions"] == [event]
 
 
 def test_ingest_returns_partial_success_when_some_segments_fail() -> None:

@@ -1,16 +1,19 @@
 services:
-  mongodb:
-    image: mongo:7
-    container_name: asx-financials-mongodb
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: asx_financials
+      POSTGRES_PASSWORD: asx_financials
+      POSTGRES_DB: asx_financials
     ports:
-      - "27017:27017"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - mongodb-data:/data/db
+      - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      test: ["CMD-SHELL", "pg_isready -U asx_financials -d asx_financials"]
       interval: 10s
       timeout: 5s
       retries: 5
 
 volumes:
-  mongodb-data:
+  postgres-data:

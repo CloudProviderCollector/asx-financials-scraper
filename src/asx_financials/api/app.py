@@ -11,15 +11,15 @@ from asx_financials.application.interfaces import (
 )
 from asx_financials.application.services import (
     DEFAULT_ASX_LISTED_COMPANIES_URL,
-    InitializeTickerUniverseCommand,
     IngestTickerCommand,
+    InitializeTickerUniverseCommand,
     SystemClock,
     TickerIngestionService,
     TickerReadService,
     TickerUniverseInitializationService,
 )
 from asx_financials.config import get_settings
-from asx_financials.infrastructure.persistence.store import create_mongo_data_store
+from asx_financials.infrastructure.persistence.store import create_postgres_data_store
 from asx_financials.infrastructure.providers.asx_listed_companies_provider import (
     AsxListedCompaniesCsvProvider,
 )
@@ -35,7 +35,7 @@ class ServiceContainer:
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    store = create_mongo_data_store(settings.mongodb_uri, settings.mongodb_database)
+    store = create_postgres_data_store(settings.database_url)
     provider = YFinanceProvider()
     ticker_universe_provider = AsxListedCompaniesCsvProvider()
     container = ServiceContainer(

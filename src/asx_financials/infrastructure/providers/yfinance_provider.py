@@ -1,9 +1,11 @@
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
@@ -11,6 +13,8 @@ import yfinance as yf
 from asx_financials.domain.enums import StatementFrequency, StatementType
 from asx_financials.domain.models import (
     CompanyProfileSnapshot,
+    CorporateAction,
+    DailyPriceBar,
     FinancialStatementSnapshot,
     ProviderFetchResult,
     RawSourcePayload,
@@ -19,6 +23,9 @@ from asx_financials.domain.models import (
 from asx_financials.domain.value_objects import AsxTicker
 
 PANDAS4_WARNING = getattr(pd.errors, "Pandas4Warning", FutureWarning)
+ASX_TIMEZONE = ZoneInfo("Australia/Sydney")
+PRICE_HISTORY_SEGMENT = "daily-price-history"
+ACTION_SEGMENT = "corporate-actions"
 
 
 def _utcnow() -> datetime:
@@ -160,6 +167,8 @@ class YFinanceProvider:
         ticker: AsxTicker,
         include_annual: bool,
         include_quarterly: bool,
+        latest_price_date: date | None = None,
+        latest_action_date: date | None = None,
     ) -> ProviderFetchResult:
         yahoo_ticker = yf.Ticker(ticker.yahoo_symbol)
         fetched_at_utc = _utcnow()
@@ -208,14 +217,168 @@ class YFinanceProvider:
                 )
             )
 
+        daily_price_bars = self._fetch_price_history(
+            yahoo_ticker, latest_price_date, fetched_at_utc, failures
+        )
+
+        corporate_actions = self._fetch_actions(
+            yahoo_ticker, latest_action_date, fetched_at_utc, failures
+        )
+
         return ProviderFetchResult(
             source_name=self.SOURCE_NAME,
             yahoo_symbol=ticker.yahoo_symbol,
             company_profile=company_profile,
             statement_snapshots=statement_snapshots,
+            daily_price_bars=daily_price_bars,
+            corporate_actions=corporate_actions,
             raw_payloads=raw_payloads,
             segment_failures=failures,
         )
+
+    def _fetch_actions(
+        self,
+        yahoo_ticker: Any,
+        latest_action_date: date | None,
+        fetched_at_utc: datetime,
+        failures: list[SegmentFailure],
+    ) -> list[CorporateAction]:
+        try:
+            # Fetch the complete, sparse event series to detect Yahoo corrections
+            # without refreshing historical OHLCV rows.
+            frame = _run_yfinance_without_pandas4_warning(
+                lambda: yahoo_ticker.get_actions(period="max")
+            )
+            if not isinstance(frame, pd.DataFrame):
+                failures.append(SegmentFailure(ACTION_SEGMENT, "Invalid actions response."))
+                return []
+            actions: list[CorporateAction] = []
+            for index, row in frame.iterrows():
+                try:
+                    session = pd.Timestamp(index)
+                    if pd.isna(session):
+                        raise ValueError("Invalid action date")
+                    if session.tzinfo is not None:
+                        session = session.tz_convert(ASX_TIMEZONE)
+                    effective_date = session.date()
+                    if effective_date > fetched_at_utc.astimezone(ASX_TIMEZONE).date():
+                        continue
+                    for column, action_type in (
+                        ("Dividends", "dividend"),
+                        ("Stock Splits", "split"),
+                    ):
+                        value = row.get(column)
+                        if value is None or pd.isna(value):
+                            continue
+                        amount = Decimal(str(value))
+                        if not amount.is_finite() or amount < 0:
+                            raise ValueError("Invalid corporate action value")
+                        if amount > 0:
+                            actions.append(
+                                CorporateAction(
+                                    action_type=action_type,
+                                    effective_date=effective_date,
+                                    value=amount,
+                                    source=self.SOURCE_NAME,
+                                    fetched_at_utc=fetched_at_utc,
+                                )
+                            )
+                except (ValueError, TypeError, InvalidOperation, OverflowError) as exc:
+                    failures.append(
+                        SegmentFailure(ACTION_SEGMENT, f"Skipped malformed action: {exc}")
+                    )
+            return actions
+        except Exception as exc:
+            failures.append(SegmentFailure(ACTION_SEGMENT, str(exc)))
+            return []
+
+    def _fetch_price_history(
+        self,
+        yahoo_ticker: Any,
+        latest_price_date: date | None,
+        fetched_at_utc: datetime,
+        failures: list[SegmentFailure],
+    ) -> list[DailyPriceBar]:
+        today = fetched_at_utc.astimezone(ASX_TIMEZONE).date()
+        if latest_price_date is not None and latest_price_date > today:
+            failures.append(SegmentFailure(PRICE_HISTORY_SEGMENT, "Stored date is in the future."))
+            return []
+
+        options: dict[str, Any] = {"interval": "1d", "auto_adjust": False}
+        if latest_price_date is None:
+            options["period"] = "max"
+        else:
+            options["start"] = latest_price_date.isoformat()
+            options["end"] = (today + timedelta(days=1)).isoformat()
+
+        try:
+            frame = _run_yfinance_without_pandas4_warning(lambda: yahoo_ticker.history(**options))
+            if not isinstance(frame, pd.DataFrame):
+                failures.append(SegmentFailure(PRICE_HISTORY_SEGMENT, "Invalid history response."))
+                return []
+            if frame.empty:
+                if latest_price_date is None:
+                    failures.append(
+                        SegmentFailure(PRICE_HISTORY_SEGMENT, "Price history was empty.")
+                    )
+                return []
+
+            bars: list[DailyPriceBar] = []
+            for index, row in frame.iterrows():
+                try:
+                    session = pd.Timestamp(index)
+                    if pd.isna(session):
+                        raise ValueError("Invalid trading date")
+                    if session.tzinfo is not None:
+                        session = session.tz_convert(ASX_TIMEZONE)
+                    trading_date = session.date()
+                    if trading_date > today or (
+                        latest_price_date is not None and trading_date < latest_price_date
+                    ):
+                        continue
+                    prices = [
+                        self._price_number(row.get(key)) for key in ("Open", "High", "Low", "Close")
+                    ]
+                    if any(value is None for value in prices):
+                        raise ValueError("Missing OHLC price")
+                    volume_value = row.get("Volume")
+                    if pd.isna(volume_value):
+                        raise ValueError("Missing volume")
+                    volume = int(volume_value)
+                    if volume < 0 or volume != volume_value:
+                        raise ValueError("Invalid volume")
+                    bars.append(
+                        DailyPriceBar(
+                            trading_date=trading_date,
+                            open=prices[0],
+                            high=prices[1],
+                            low=prices[2],
+                            close=prices[3],
+                            adjusted_close=self._price_number(row.get("Adj Close")),
+                            volume=volume,
+                            source=self.SOURCE_NAME,
+                            fetched_at_utc=fetched_at_utc,
+                        )
+                    )
+                except (ValueError, TypeError, InvalidOperation, OverflowError) as exc:
+                    failures.append(
+                        SegmentFailure(PRICE_HISTORY_SEGMENT, f"Skipped malformed price row: {exc}")
+                    )
+            if not bars and latest_price_date is None and not failures:
+                failures.append(SegmentFailure(PRICE_HISTORY_SEGMENT, "No valid price bars."))
+            return bars
+        except Exception as exc:
+            failures.append(SegmentFailure(PRICE_HISTORY_SEGMENT, str(exc)))
+            return []
+
+    @staticmethod
+    def _price_number(value: Any) -> Decimal | None:
+        if value is None or pd.isna(value):
+            return None
+        number = Decimal(str(value))
+        if not number.is_finite() or number < 0:
+            raise ValueError("Invalid price")
+        return number
 
     def _safe_info(self, yahoo_ticker: Any) -> dict[str, Any]:
         info = _run_yfinance_without_pandas4_warning(yahoo_ticker.get_info)

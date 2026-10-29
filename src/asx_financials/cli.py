@@ -14,7 +14,7 @@ from asx_financials.application.services import (
 from asx_financials.config import get_settings
 from asx_financials.domain.enums import IngestionRunStatus
 from asx_financials.domain.models import CompanyDetails, LatestIngestionRun, StatementPreview
-from asx_financials.infrastructure.persistence.store import create_mongo_data_store
+from asx_financials.infrastructure.persistence.store import create_postgres_data_store
 from asx_financials.infrastructure.providers.yfinance_provider import YFinanceProvider
 
 RESET = "\033[0m"
@@ -79,7 +79,7 @@ def main() -> None:
     include_quarterly = not args.annual_only
 
     settings = get_settings()
-    store = create_mongo_data_store(settings.mongodb_uri, settings.mongodb_database)
+    store = create_postgres_data_store(settings.database_url)
     provider = YFinanceProvider()
     service = TickerIngestionService(provider, store, SystemClock())
     read_service = TickerReadService(store)
@@ -138,7 +138,8 @@ def _emit_result_summary(
         (
             f"{result.status.value.upper()}: {result.ticker} "
             f"({company_name}) | {snapshot_label} "
-            f"| raw_payloads={result.stored_raw_payload_count}"
+            f"| raw_payloads={result.stored_raw_payload_count} "
+            f"| daily_price_bars={result.stored_price_bar_count}"
         ),
         color=status_color,
         bold=True,

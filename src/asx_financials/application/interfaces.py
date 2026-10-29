@@ -1,11 +1,13 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Protocol
 
 from asx_financials.domain.models import (
-    AsxListedCompany,
     AsxListedCompaniesFetchResult,
+    AsxListedCompany,
     CompanyDetails,
     CompanyProfileSnapshot,
+    CorporateAction,
+    DailyPriceBar,
     FinancialStatementSnapshot,
     LatestIngestionRun,
     PersistedIngestionOutcome,
@@ -28,6 +30,8 @@ class FinancialDataProvider(Protocol):
         ticker: AsxTicker,
         include_annual: bool,
         include_quarterly: bool,
+        latest_price_date: date | None = None,
+        latest_action_date: date | None = None,
     ) -> ProviderFetchResult: ...
 
 
@@ -64,6 +68,8 @@ class FinancialDataStore(Protocol):
         message: str,
         company_profile: CompanyProfileSnapshot | None,
         statement_snapshots: list[FinancialStatementSnapshot],
+        daily_price_bars: list[DailyPriceBar],
+        corporate_actions: list[CorporateAction],
         raw_payloads: list[RawSourcePayload],
         segment_failures: list[SegmentFailure],
     ) -> PersistedIngestionOutcome: ...
@@ -74,6 +80,18 @@ class FinancialDataStore(Protocol):
         completed_at_utc: datetime,
         message: str,
     ) -> None: ...
+
+    def get_latest_price_date(
+        self, ticker: AsxTicker, exchange_code: str = "ASX"
+    ) -> date | None: ...
+
+    def get_latest_action_date(
+        self, ticker: AsxTicker, exchange_code: str = "ASX"
+    ) -> date | None: ...
+
+    def get_corporate_actions(
+        self, ticker: AsxTicker, exchange_code: str = "ASX"
+    ) -> list[CorporateAction]: ...
 
     def get_latest_ingestion(self, ticker: AsxTicker) -> LatestIngestionRun | None: ...
 

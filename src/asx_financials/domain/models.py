@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from asx_financials.domain.enums import IngestionRunStatus, StatementFrequency, StatementType
@@ -97,17 +98,46 @@ class StatementPreview:
 
 
 @dataclass(frozen=True, slots=True)
+class DailyPriceBar:
+    trading_date: date
+    open: Decimal | None
+    high: Decimal | None
+    low: Decimal | None
+    close: Decimal | None
+    adjusted_close: Decimal | None
+    volume: int | None
+    source: str
+    fetched_at_utc: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class CorporateAction:
+    action_type: str
+    effective_date: date
+    value: Decimal
+    source: str
+    fetched_at_utc: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderFetchResult:
     source_name: str
     yahoo_symbol: str
     company_profile: CompanyProfileSnapshot | None
     statement_snapshots: list[FinancialStatementSnapshot] = field(default_factory=list)
+    daily_price_bars: list[DailyPriceBar] = field(default_factory=list)
+    corporate_actions: list[CorporateAction] = field(default_factory=list)
     raw_payloads: list[RawSourcePayload] = field(default_factory=list)
     segment_failures: list[SegmentFailure] = field(default_factory=list)
 
     @property
     def has_any_successful_data(self) -> bool:
-        return self.company_profile is not None or bool(self.statement_snapshots)
+        return (
+            self.company_profile is not None
+            or bool(self.statement_snapshots)
+            or bool(self.daily_price_bars)
+            or bool(self.corporate_actions)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +150,7 @@ class IngestionExecutionResult:
     completed_at_utc: datetime
     inserted_snapshot_count: int
     stored_raw_payload_count: int
+    stored_price_bar_count: int
     segment_failures: list[SegmentFailure]
     message: str
 
@@ -128,6 +159,7 @@ class IngestionExecutionResult:
 class PersistedIngestionOutcome:
     inserted_snapshot_count: int
     stored_raw_payload_count: int
+    stored_price_bar_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
