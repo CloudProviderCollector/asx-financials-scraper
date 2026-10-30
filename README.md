@@ -39,6 +39,12 @@ One-off ingestion (refreshes fundamentals and daily price/volume history):
 
 ```bash
 uv run asx-financials ingest BHP
+```
+
+To ingest a ticker CSV gradually, use the batch runner (minimum 60 seconds between ticker starts). It reads the `ticker` column and records resumable progress as JSON Lines; successful and partially successful tickers are skipped when rerun, while failures can be retried. Stop the process to pause, then run the same command to resume. Check partial failures in the progress file and stored ingestion runs.
+
+```powershell
+uv run python -m asx_financials.ingest_ticker_csv C:\path\to\tickers.csv --progress .venv\ticker-progress.jsonl
 uv run asx-financials ingest CSL --annual-only
 uv run asx-financials ingest WBC --quarterly-only
 ```
