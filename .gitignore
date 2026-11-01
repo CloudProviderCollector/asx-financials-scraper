@@ -14,6 +14,7 @@ htmlcov/
 *.sqlite3
 *.cache
 *.log
+/data/commodity_prices/
 dist/
 build/
 .eggs/

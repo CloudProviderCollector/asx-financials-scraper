@@ -59,6 +59,17 @@ uv run streamlit run src\asx_financials\dashboard.py
 
 Open the local URL printed by Streamlit (typically `http://localhost:8501`) and enter an ASX ticker. The dashboard reads existing PostgreSQL data from `DATABASE_URL` in `.env`, showing a company overview (business description, market data, valuation, financial performance, balance sheet, cash flow, dividends, ownership, statement coverage and highlights), the complete saved profile, statement revisions, financial facts, raw responses, ingestion runs, and historical daily prices and share volumes. The Daily prices & volume tab combines closing prices (including derived adjusted close) and volume bars in one chart with a shared date axis, above the OHLCV history table. It does not scrape or modify data; ingest a ticker with the CLI first if it has no stored records.
 
+## Commodity price history
+
+Download the longest available public benchmark series into ignored `data/commodity_prices/` CSVs:
+
+```powershell
+uv run python -m asx_financials.download_commodity_prices
+# Or choose a location: uv run python -m asx_financials.download_commodity_prices --output C:\path\to\prices
+```
+
+The command refreshes seven **separate** CSVs, each with date, commodity, frequency, price, unit, source and series columns. FRED/EIA provides daily WTI crude (USD/barrel, since 1986), Brent crude (USD/barrel, since 1987) and **US Gulf Coast jet fuel spot** (USD/gallon, since 1990). This jet-fuel benchmark is not an Australian airline's contracted purchase price. The World Bank's October 2026 Pink Sheet workbook provides monthly gold (USD/troy ounce) and Brent (USD/barrel) back to 1960, plus WTI back to 1982; its latest observation is September 2026. Yahoo Finance's `GC=F` supplies daily COMEX gold futures closes from 2000, **not gold spot prices**. Frequencies, futures versus spot, and USD units must not be mixed without conversion. Blank/nonpositive observations are omitted; source revisions can change values. FRED's former LBMA gold-fixing series was removed, so a daily spot-gold fixing is not included. The script prints observed coverage, and reports failed sources rather than silently claiming complete data. The World Bank workbook URL is pinned to its October 2026 release; update it for later releases. Downloaded data is not loaded into PostgreSQL.
+
 ## Debug in PyCharm
 
 1. Open the repo and set the project interpreter to `.venv/bin/python` (or `.venv/Scripts/python.exe` on Windows).
