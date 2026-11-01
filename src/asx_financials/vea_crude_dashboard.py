@@ -73,6 +73,46 @@ def comparison_chart(
     return figure
 
 
+def average_vea_oil_ratio(
+    shares: list[tuple[date, Decimal]], oil: list[tuple[date, Decimal]]
+) -> tuple[Decimal, int] | None:
+    oil_by_date = dict(oil)
+    ratios = [
+        value / oil_by_date[day]
+        for day, value in shares
+        if day in oil_by_date and oil_by_date[day] > 0
+    ]
+    if not ratios:
+        return None
+    return sum(ratios, Decimal(0)) / len(ratios), len(ratios)
+
+
+def normalized_chart(
+    shares: list[tuple[date, Decimal]], oil: list[tuple[date, Decimal]], ratio: Decimal
+) -> go.Figure:
+    figure = go.Figure()
+    figure.add_trace(
+        go.Scatter(
+            x=[day for day, _ in shares],
+            y=[float(value) for _, value in shares],
+            name="VEA.AX close (AUD/share)",
+            mode="lines",
+        )
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=[day for day, _ in oil],
+            y=[float(value * ratio) for _, value in oil],
+            name="Brent crude scaled by average VEA/Brent ratio",
+            mode="lines",
+        )
+    )
+    figure.update_xaxes(title_text="Date")
+    figure.update_yaxes(title_text="VEA close / normalized Brent (AUD/share scale)")
+    figure.update_layout(hovermode="x unified", height=650)
+    return figure
+
+
 def main() -> None:
     st.set_page_config(page_title="VEA vs Brent crude", layout="wide")
     st.title("VEA vs Brent crude oil")
@@ -99,6 +139,18 @@ def main() -> None:
         st.warning("VEA and Brent crude have no overlapping date range.")
         return
     st.plotly_chart(comparison_chart(shares, overlapping_oil), width="stretch")
+    average = average_vea_oil_ratio(shares, overlapping_oil)
+    if average is None:
+        st.warning("No dates have both a valid VEA close and Brent price for normalization.")
+        return
+    ratio, matched_days = average
+    st.subheader("VEA vs normalized Brent crude")
+    st.caption(
+        "Normalized Brent = Brent price multiplied by mean(VEA close / Brent price) over "
+        f"{matched_days:,} matching trading dates (factor: {ratio:.6f}). "
+        "Both lines use one visual scale; this is not a currency conversion."
+    )
+    st.plotly_chart(normalized_chart(shares, overlapping_oil, ratio), width="stretch")
 
 
 if __name__ == "__main__":

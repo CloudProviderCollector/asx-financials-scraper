@@ -4,7 +4,13 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-from asx_financials.vea_crude_dashboard import comparison_chart, load_prices, main
+from asx_financials.vea_crude_dashboard import (
+    average_vea_oil_ratio,
+    comparison_chart,
+    load_prices,
+    main,
+    normalized_chart,
+)
 
 
 def test_queries_target_vea_and_daily_brent() -> None:
@@ -45,6 +51,26 @@ def test_comparison_chart_has_shared_dates_and_separate_units() -> None:
     assert figure.layout.yaxis2.title.text == "Brent crude (USD/barrel)"
 
 
+def test_normalization_uses_mean_of_same_date_ratios_not_ratio_of_means() -> None:
+    shares = [
+        (date(2026, 1, 2), Decimal("4")),
+        (date(2026, 1, 5), Decimal("9")),
+        (date(2026, 1, 6), Decimal("100")),
+    ]
+    oil = [
+        (date(2026, 1, 1), Decimal("1000")),
+        (date(2026, 1, 2), Decimal("2")),
+        (date(2026, 1, 5), Decimal("3")),
+    ]
+    assert average_vea_oil_ratio(shares, oil) == (Decimal("2.5"), 2)
+    figure = normalized_chart(shares, oil, Decimal("2.5"))
+    assert [trace.yaxis for trace in figure.data] == [None, None]
+    assert list(figure.data[0].y) == [4.0, 9.0, 100.0]
+    assert list(figure.data[1].y) == [2500.0, 5.0, 7.5]
+    assert list(figure.data[1].x) == [day for day, _ in oil]
+    assert average_vea_oil_ratio(shares, [(date(2026, 1, 7), Decimal("2"))]) is None
+
+
 def test_main_limits_oil_history_to_vea_date_range() -> None:
     shares = [(date(2026, 1, 2), Decimal("2.5")), (date(2026, 1, 5), Decimal("2.6"))]
     oil = [
@@ -55,15 +81,20 @@ def test_main_limits_oil_history_to_vea_date_range() -> None:
     with (
         patch("asx_financials.vea_crude_dashboard.st.set_page_config"),
         patch("asx_financials.vea_crude_dashboard.st.title"),
-        patch("asx_financials.vea_crude_dashboard.st.caption"),
+        patch("asx_financials.vea_crude_dashboard.st.caption") as caption,
+        patch("asx_financials.vea_crude_dashboard.st.subheader"),
         patch("asx_financials.vea_crude_dashboard.st.plotly_chart") as plot,
         patch("asx_financials.vea_crude_dashboard._engine"),
         patch("asx_financials.vea_crude_dashboard.load_prices", return_value=(shares, oil)),
     ):
         main()
-    figure = plot.call_args.args[0]
-    assert list(figure.data[1].x) == [date(2026, 1, 2)]
-    assert plot.call_args.kwargs["width"] == "stretch"
+    assert plot.call_count == 2
+    original, normalized = [call.args[0] for call in plot.call_args_list]
+    assert list(original.data[1].x) == [date(2026, 1, 2)]
+    assert list(normalized.data[1].x) == [date(2026, 1, 2)]
+    assert list(normalized.data[1].y) == [2.5]
+    assert "1 matching trading dates" in caption.call_args_list[-1].args[0]
+    assert all(call.kwargs["width"] == "stretch" for call in plot.call_args_list)
 
 
 def test_main_handles_missing_series() -> None:
