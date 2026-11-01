@@ -61,14 +61,14 @@ Open the local URL printed by Streamlit (typically `http://localhost:8501`) and 
 
 ## Commodity price history
 
-Download the longest available public benchmark series into ignored `data/commodity_prices/` CSVs:
+Download the longest available public benchmark series directly into PostgreSQL using `DATABASE_URL` from `.env`. Apply migrations first:
 
 ```powershell
+uv run alembic upgrade head
 uv run python -m asx_financials.download_commodity_prices
-# Or choose a location: uv run python -m asx_financials.download_commodity_prices --output C:\path\to\prices
 ```
 
-The command refreshes seven **separate** CSVs, each with date, commodity, frequency, price, unit, source and series columns. FRED/EIA provides daily WTI crude (USD/barrel, since 1986), Brent crude (USD/barrel, since 1987) and **US Gulf Coast jet fuel spot** (USD/gallon, since 1990). This jet-fuel benchmark is not an Australian airline's contracted purchase price. The World Bank's October 2026 Pink Sheet workbook provides monthly gold (USD/troy ounce) and Brent (USD/barrel) back to 1960, plus WTI back to 1982; its latest observation is September 2026. Yahoo Finance's `GC=F` supplies daily COMEX gold futures closes from 2000, **not gold spot prices**. Frequencies, futures versus spot, and USD units must not be mixed without conversion. Blank/nonpositive observations are omitted; source revisions can change values. FRED's former LBMA gold-fixing series was removed, so a daily spot-gold fixing is not included. The script prints observed coverage, and reports failed sources rather than silently claiming complete data. The World Bank workbook URL is pinned to its October 2026 release; update it for later releases. Downloaded data is not loaded into PostgreSQL.
+The command upserts seven separate series in `commodity_prices`, keyed by source, series and observation date; reruns update revised prices and fetch timestamps without duplicating observations. Columns include commodity, frequency, price, unit, source, series and observation date. Inspect coverage with `SELECT source, series, min(observation_date), max(observation_date), count(*) FROM commodity_prices GROUP BY source, series;`. FRED/EIA provides daily WTI crude (USD/barrel, since 1986), Brent crude (USD/barrel, since 1987) and **US Gulf Coast jet fuel spot** (USD/gallon, since 1990). This jet-fuel benchmark is not an Australian airline's contracted purchase price. The World Bank's October 2026 Pink Sheet workbook provides monthly gold (USD/troy ounce) and Brent (USD/barrel) back to 1960, plus WTI back to 1982; its latest observation is September 2026. Yahoo Finance's `GC=F` supplies daily COMEX gold futures closes from 2000, **not gold spot prices**. Frequencies, futures versus spot, and USD units must not be mixed without conversion. Blank/nonpositive observations are omitted; source revisions can change values. FRED's former LBMA gold-fixing series was removed, so a daily spot-gold fixing is not included. The script prints observed coverage, and reports failed sources rather than silently claiming complete data. The World Bank workbook URL is pinned to its October 2026 release; update it for later releases. No local CSV files are written; FRED's CSV-formatted HTTP response is parsed in memory.
 
 ## Debug in PyCharm
 

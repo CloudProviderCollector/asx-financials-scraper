@@ -21,6 +21,27 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 metadata = MetaData()
 
+commodity_prices = Table(
+    "commodity_prices",
+    metadata,
+    Column("source", String(80), primary_key=True),
+    Column("series", String(80), primary_key=True),
+    Column("observation_date", Date, primary_key=True),
+    Column("commodity", String(80), nullable=False),
+    Column("frequency", String(12), nullable=False),
+    Column("price", Numeric(24, 8), nullable=False),
+    Column("unit", String(32), nullable=False),
+    Column("fetched_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint("price > 0", name="ck_commodity_prices_positive"),
+    CheckConstraint("frequency IN ('daily', 'monthly')", name="ck_commodity_prices_frequency"),
+)
+Index(
+    "ix_commodity_prices_lookup",
+    commodity_prices.c.commodity,
+    commodity_prices.c.frequency,
+    commodity_prices.c.observation_date.desc(),
+)
+
 tickers = Table(
     "tickers",
     metadata,

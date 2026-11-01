@@ -1,17 +1,20 @@
-"""Download long-run oil, gold and jet-fuel benchmark prices into separate CSV files."""
+"""Download long-run oil, gold and jet-fuel benchmark prices into PostgreSQL."""
 
-import argparse
 import csv
 import io
 import re
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from itertools import chain
-from pathlib import Path
 
 import requests
 import yfinance as yf
 from openpyxl import load_workbook
+from sqlalchemy import Engine, create_engine
+from sqlalchemy.dialects.postgresql import insert
+
+from asx_financials.config import get_settings
+from asx_financials.infrastructure.persistence.schema import commodity_prices
 
 FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={}"
 WORLD_BANK_URL = (
@@ -22,18 +25,18 @@ WORLD_BANK_URL = (
 # The World Bank's October 2026 workbook is its latest published monthly history
 # as of 2026-11-01. Update this URL when it publishes a newer historical workbook.
 DAILY_SERIES = {
-    "crude_wti_daily.csv": ("DCOILWTICO", "crude_wti", "USD/barrel"),
-    "crude_brent_daily.csv": ("DCOILBRENTEU", "crude_brent", "USD/barrel"),
-    "jet_fuel_us_gulf_coast_daily.csv": (
+    "crude_wti_daily": ("DCOILWTICO", "crude_wti", "USD/barrel"),
+    "crude_brent_daily": ("DCOILBRENTEU", "crude_brent", "USD/barrel"),
+    "jet_fuel_us_gulf_coast_daily": (
         "DJFUELUSGULF",
         "jet_fuel_us_gulf_coast",
         "USD/gallon",
     ),
 }
 MONTHLY_SERIES = {
-    "gold_monthly.csv": ("Gold", "gold", "USD/troy_oz"),
-    "crude_wti_monthly.csv": ("Crude oil, WTI", "crude_wti", "USD/barrel"),
-    "crude_brent_monthly.csv": ("Crude oil, Brent", "crude_brent", "USD/barrel"),
+    "gold_monthly": ("Gold", "gold", "USD/troy_oz"),
+    "crude_wti_monthly": ("Crude oil, WTI", "crude_wti", "USD/barrel"),
+    "crude_brent_monthly": ("Crude oil, Brent", "crude_brent", "USD/barrel"),
 }
 FIELDS = ("date", "commodity", "frequency", "price", "unit", "source", "series")
 
@@ -149,41 +152,60 @@ def read_gold_futures() -> list[dict[str, str]]:
     return rows
 
 
-def save_csv(path: Path, rows: list[dict[str, str]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
-    try:
-        with temporary.open("w", encoding="utf-8", newline="") as destination:
-            writer = csv.DictWriter(destination, fieldnames=FIELDS)
-            writer.writeheader()
-            writer.writerows(rows)
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
+def save_prices(engine: Engine, rows: list[dict[str, str]]) -> None:
+    fetched_at = datetime.now(UTC)
+    with engine.begin() as connection:
+        for offset in range(0, len(rows), 1000):
+            values = [
+                {
+                    "source": row["source"],
+                    "series": row["series"],
+                    "observation_date": date.fromisoformat(row["date"]),
+                    "commodity": row["commodity"],
+                    "frequency": row["frequency"],
+                    "price": Decimal(row["price"]),
+                    "unit": row["unit"],
+                    "fetched_at": fetched_at,
+                }
+                for row in rows[offset : offset + 1000]
+            ]
+            statement = insert(commodity_prices).values(values)
+            connection.execute(
+                statement.on_conflict_do_update(
+                    index_elements=["source", "series", "observation_date"],
+                    set_={
+                        "commodity": statement.excluded.commodity,
+                        "frequency": statement.excluded.frequency,
+                        "price": statement.excluded.price,
+                        "unit": statement.excluded.unit,
+                        "fetched_at": statement.excluded.fetched_at,
+                    },
+                )
+            )
 
 
-def download(output: Path) -> None:
+def download(engine: Engine) -> None:
     errors = []
-    for filename, (series, commodity, unit) in DAILY_SERIES.items():
+    for name, (series, commodity, unit) in DAILY_SERIES.items():
         try:
             rows = read_fred(fetch(FRED_URL.format(series)), series, commodity, unit)
-            save_csv(output / filename, rows)
-            print(f"{filename}: {len(rows)} observations, {rows[0]['date']} to {rows[-1]['date']}")
+            save_prices(engine, rows)
+            print(f"{name}: {len(rows)} observations, {rows[0]['date']} to {rows[-1]['date']}")
         except (requests.RequestException, OSError, ValueError) as exc:
-            errors.append(f"{filename}: {exc}")
+            errors.append(f"{name}: {exc}")
     try:
         rows = read_gold_futures()
-        save_csv(output / "gold_comex_futures_daily.csv", rows)
+        save_prices(engine, rows)
         print(
-            f"gold_comex_futures_daily.csv: {len(rows)} observations, "
+            f"gold_comex_futures_daily: {len(rows)} observations, "
             f"{rows[0]['date']} to {rows[-1]['date']}"
         )
     except (OSError, ValueError, KeyError) as exc:
         errors.append(f"Yahoo GC=F futures: {exc}")
     try:
-        for filename, rows in read_world_bank(fetch(WORLD_BANK_URL)).items():
-            save_csv(output / filename, rows)
-            print(f"{filename}: {len(rows)} observations, {rows[0]['date']} to {rows[-1]['date']}")
+        for name, rows in read_world_bank(fetch(WORLD_BANK_URL)).items():
+            save_prices(engine, rows)
+            print(f"{name}: {len(rows)} observations, {rows[0]['date']} to {rows[-1]['date']}")
     except (requests.RequestException, OSError, ValueError, KeyError) as exc:
         errors.append(f"World Bank workbook: {exc}")
     if errors:
@@ -191,10 +213,11 @@ def download(output: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=Path("data/commodity_prices"))
-    args = parser.parse_args()
-    download(args.output)
+    engine = create_engine(get_settings().database_url)
+    try:
+        download(engine)
+    finally:
+        engine.dispose()
 
 
 if __name__ == "__main__":

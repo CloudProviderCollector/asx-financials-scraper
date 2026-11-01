@@ -1,12 +1,15 @@
 """Validate price-series parsing without making network requests."""
 
 import io
-from pathlib import Path
+from datetime import date
+from decimal import Decimal
+from unittest.mock import MagicMock
 
 import pytest
 from openpyxl import Workbook
+from sqlalchemy.dialects import postgresql
 
-from asx_financials.download_commodity_prices import price, read_fred, read_world_bank, save_csv
+from asx_financials.download_commodity_prices import price, read_fred, read_world_bank, save_prices
 
 
 def test_fred_skips_missing_days_and_rejects_wrong_series() -> None:
@@ -23,7 +26,7 @@ def test_fred_skips_missing_days_and_rejects_wrong_series() -> None:
     assert price("0") is None
 
 
-def test_world_bank_monthly_gold_and_crude_parsing(tmp_path: Path) -> None:
+def test_world_bank_monthly_gold_and_crude_parsing() -> None:
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Monthly Prices"
@@ -33,13 +36,34 @@ def test_world_bank_monthly_gold_and_crude_parsing(tmp_path: Path) -> None:
     data = io.BytesIO()
     workbook.save(data)
     result = read_world_bank(data.getvalue())
-    assert [(row["date"], row["price"]) for row in result["gold_monthly.csv"]] == [
+    assert [(row["date"], row["price"]) for row in result["gold_monthly"]] == [
         ("1960-01-01", "35"),
         ("1960-02-01", "36"),
     ]
-    assert len(result["crude_wti_monthly.csv"]) == 1
-    assert result["crude_brent_monthly.csv"][0]["unit"] == "USD/barrel"
-    destination = tmp_path / "gold.csv"
-    save_csv(destination, result["gold_monthly.csv"])
-    assert destination.read_text(encoding="utf-8").splitlines()[0].startswith("date,commodity,")
-    assert not destination.with_suffix(".tmp").exists()
+    assert len(result["crude_wti_monthly"]) == 1
+    assert result["crude_brent_monthly"][0]["unit"] == "USD/barrel"
+
+
+def test_save_prices_upserts_rows_with_provenance_and_dates() -> None:
+    engine = MagicMock()
+    connection = engine.begin.return_value.__enter__.return_value
+    rows = [
+        {
+            "date": "1960-01-01",
+            "commodity": "gold",
+            "frequency": "monthly",
+            "price": "35.25",
+            "unit": "USD/troy_oz",
+            "source": "World Bank",
+            "series": "Gold",
+        }
+    ]
+    save_prices(engine, rows)
+    assert connection.execute.call_count == 1
+    statement = connection.execute.call_args.args[0]
+    sql = str(statement.compile(dialect=postgresql.dialect()))
+    assert "ON CONFLICT (source, series, observation_date) DO UPDATE" in sql
+    params = statement.compile(dialect=postgresql.dialect()).params
+    assert params["observation_date_m0"] == date(1960, 1, 1)
+    assert params["price_m0"] == Decimal("35.25")
+    assert params["source_m0"] == "World Bank"
