@@ -59,6 +59,16 @@ uv run streamlit run src\asx_financials\dashboard.py
 
 Open the local URL printed by Streamlit (typically `http://localhost:8501`) and enter an ASX ticker. The dashboard reads existing PostgreSQL data from `DATABASE_URL` in `.env`, showing a company overview (business description, market data, valuation, financial performance, balance sheet, cash flow, dividends, ownership, statement coverage and highlights), the complete saved profile, statement revisions, financial facts, raw responses, ingestion runs, and historical daily prices and share volumes. The Daily prices & volume tab combines closing prices (including derived adjusted close) and volume bars in one chart with a shared date axis, above the OHLCV history table. It does not scrape or modify data; ingest a ticker with the CLI first if it has no stored records.
 
+## VEA and crude oil comparison
+
+Run the read-only, dual-axis Streamlit chart using existing VEA daily closes and the daily FRED/EIA Brent crude benchmark stored in PostgreSQL:
+
+```powershell
+uv run streamlit run src\asx_financials\vea_crude_dashboard.py
+```
+
+The left axis shows VEA.AX close in AUD per share; the right axis shows Brent spot in USD per barrel. The graph uses the VEA history date range and does not convert currencies or fetch missing observations. Ingest VEA and download commodity prices first if either series is empty.
+
 ## Commodity price history
 
 Download the longest available public benchmark series directly into PostgreSQL using `DATABASE_URL` from `.env`. Apply migrations first:
