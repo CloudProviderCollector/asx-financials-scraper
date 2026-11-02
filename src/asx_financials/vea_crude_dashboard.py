@@ -2,6 +2,7 @@
 
 from datetime import date
 from decimal import Decimal
+from statistics import median
 from typing import cast
 
 import plotly.graph_objects as go
@@ -153,6 +154,18 @@ def vea_per_crude_chart(
         ),
         secondary_y=True,
     )
+    if ratios:
+        median_ratio = median(value for _, value in ratios)
+        figure.add_trace(
+            go.Scatter(
+                x=[shares[0][0], shares[-1][0]],
+                y=[float(median_ratio)] * 2,
+                name=f"Median normalized VEA / Brent ({median_ratio:.3f})",
+                mode="lines",
+                line={"dash": "dash"},
+            ),
+            secondary_y=True,
+        )
     figure.update_xaxes(title_text="Date")
     figure.update_yaxes(title_text="VEA close (AUD/share)", secondary_y=False)
     figure.update_yaxes(title_text="Normalized VEA / normalized Brent (unitless)", secondary_y=True)
@@ -204,8 +217,9 @@ def main() -> None:
         "(price - minimum) / (maximum - minimum) across the entire matched period. "
         "The original VEA close uses the left axis and normalized VEA divided by "
         "normalized Brent uses the right axis on the same graph, which autoscales to "
-        "the computed ratios. Dates where normalized Brent is zero have no ratio; a "
-        "constant series has no defined ratio."
+        "the computed ratios. The dashed line marks their median across all valid "
+        "matching dates. Dates where normalized Brent is zero have no ratio; a constant "
+        "series has no defined ratio."
     )
     st.plotly_chart(vea_per_crude_chart(shares, overlapping_oil), width="stretch")
 

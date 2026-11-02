@@ -86,13 +86,17 @@ def test_vea_per_crude_chart_min_max_scales_matched_prices_before_dividing() -> 
         (date(2026, 1, 6), Decimal("120")),
     ]
     figure = vea_per_crude_chart(shares, oil)
-    assert [trace.yaxis for trace in figure.data] == ["y", "y2"]
+    assert [trace.yaxis for trace in figure.data] == ["y", "y2", "y2"]
     assert figure.data[0].name == "VEA.AX close (AUD/share)"
     assert figure.data[1].name == "Normalized VEA / normalized Brent"
     assert list(figure.data[0].x) == [day for day, _ in shares]
     assert list(figure.data[0].y) == [2.0, 4.0, 6.0, 20.0]
     assert list(figure.data[1].x) == [date(2026, 1, 5), date(2026, 1, 6)]
     assert list(figure.data[1].y) == [3.0, 1.0]
+    assert list(figure.data[2].x) == [shares[0][0], shares[-1][0]]
+    assert list(figure.data[2].y) == [2.0, 2.0]
+    assert figure.data[2].line.dash == "dash"
+    assert "Median" in figure.data[2].name
     assert figure.layout.yaxis.title.text == "VEA close (AUD/share)"
     assert figure.layout.yaxis2.title.text == "Normalized VEA / normalized Brent (unitless)"
     assert figure.layout.yaxis2.range is None
@@ -114,6 +118,8 @@ def test_vea_per_crude_chart_autoscales_without_capping_ratio_values() -> None:
     ]
     figure = vea_per_crude_chart(shares, oil)
     assert list(figure.data[1].y) == [float(Decimal(170) / 3), 1.0]
+    expected_median = float((Decimal(170) / 3 + Decimal(1)) / 2)
+    assert list(figure.data[2].y) == [expected_median, expected_median]
     assert figure.layout.yaxis2.range is None
 
 
@@ -121,11 +127,31 @@ def test_vea_per_crude_chart_skips_constant_series_and_unmatched_dates() -> None
     shares = [(date(2026, 1, 2), Decimal("2")), (date(2026, 1, 3), Decimal("4"))]
     oil = [(date(2026, 1, 2), Decimal("60")), (date(2026, 1, 3), Decimal("60"))]
     assert list(vea_per_crude_chart(shares, oil).data[1].x) == []
+    assert len(vea_per_crude_chart(shares, oil).data) == 2
     assert list(vea_per_crude_chart(shares, []).data[1].x) == []
     varied_oil = [(date(2026, 1, 2), Decimal("60")), (date(2026, 1, 3), Decimal("70"))]
     figure = vea_per_crude_chart(shares, varied_oil)
     assert list(figure.data[1].x) == [date(2026, 1, 3)]
     assert list(figure.data[1].y) == [1.0]
+    assert list(figure.data[2].y) == [1.0, 1.0]
+
+
+def test_vea_per_crude_chart_median_uses_all_valid_ratio_points() -> None:
+    shares = [
+        (date(2026, 1, 2), Decimal("2")),
+        (date(2026, 1, 3), Decimal("4")),
+        (date(2026, 1, 4), Decimal("6")),
+        (date(2026, 1, 5), Decimal("8")),
+    ]
+    oil = [
+        (date(2026, 1, 2), Decimal("60")),
+        (date(2026, 1, 3), Decimal("80")),
+        (date(2026, 1, 4), Decimal("90")),
+        (date(2026, 1, 5), Decimal("120")),
+    ]
+    figure = vea_per_crude_chart(shares, oil)
+    assert list(figure.data[1].y) == [1.0, 4 / 3, 1.0]
+    assert list(figure.data[2].y) == [1.0, 1.0]
 
 
 def test_main_limits_oil_history_to_vea_date_range() -> None:
