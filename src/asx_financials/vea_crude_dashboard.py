@@ -155,7 +155,9 @@ def crude_per_vea_chart(
     )
     figure.update_xaxes(title_text="Date")
     figure.update_yaxes(title_text="VEA close (AUD/share)", secondary_y=False)
-    figure.update_yaxes(title_text="Normalized Brent / normalized VEA (unitless)", secondary_y=True)
+    figure.update_yaxes(
+        title_text="Normalized Brent / normalized VEA (unitless)", range=[0, 7], secondary_y=True
+    )
     figure.update_layout(hovermode="x unified", height=650)
     return figure
 
