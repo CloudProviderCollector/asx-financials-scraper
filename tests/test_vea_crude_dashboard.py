@@ -96,8 +96,9 @@ def test_vea_per_crude_chart_min_max_scales_matched_prices_before_dividing() -> 
     assert figure.layout.yaxis.title.text == "VEA close (AUD/share)"
     assert figure.layout.yaxis2.title.text == "Normalized VEA / normalized Brent (unitless)"
     assert list(figure.layout.yaxis2.range) == [0, 7]
-    assert figure.layout.yaxis.domain[0] > figure.layout.yaxis2.domain[1]
-    assert figure.layout.xaxis.matches == "x2"
+    assert figure.data[0].xaxis == figure.data[1].xaxis == "x"
+    assert figure.layout.yaxis2.overlaying == "y"
+    assert figure.layout.yaxis2.side == "right"
 
 
 def test_vea_per_crude_chart_limits_axis_without_capping_ratio_values() -> None:

@@ -134,12 +134,7 @@ def vea_per_crude_chart(
                 for day, share_value, oil_value in paired
                 if oil_value > oil_min
             ]
-    figure = make_subplots(
-        rows=2,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.08,
-    )
+    figure = make_subplots(specs=[[{"secondary_y": True}]])
     figure.add_trace(
         go.Scatter(
             x=[day for day, _ in shares],
@@ -147,8 +142,7 @@ def vea_per_crude_chart(
             name="VEA.AX close (AUD/share)",
             mode="lines",
         ),
-        row=1,
-        col=1,
+        secondary_y=False,
     )
     figure.add_trace(
         go.Scatter(
@@ -157,15 +151,14 @@ def vea_per_crude_chart(
             name="Normalized VEA / normalized Brent",
             mode="lines",
         ),
-        row=2,
-        col=1,
+        secondary_y=True,
     )
-    figure.update_xaxes(title_text="Date", row=2, col=1)
-    figure.update_yaxes(title_text="VEA close (AUD/share)", row=1, col=1)
+    figure.update_xaxes(title_text="Date")
+    figure.update_yaxes(title_text="VEA close (AUD/share)", secondary_y=False)
     figure.update_yaxes(
-        title_text="Normalized VEA / normalized Brent (unitless)", range=[0, 7], row=2, col=1
+        title_text="Normalized VEA / normalized Brent (unitless)", range=[0, 7], secondary_y=True
     )
-    figure.update_layout(hovermode="x unified", height=750)
+    figure.update_layout(hovermode="x unified", height=650)
     return figure
 
 
@@ -211,10 +204,10 @@ def main() -> None:
     st.caption(
         "For matching dates, scale each price series independently to [0, 1] using "
         "(price - minimum) / (maximum - minimum) across the entire matched period. "
-        "The top panel shows the original VEA close; the bottom panel shows normalized "
-        "VEA divided by normalized Brent. The ratio axis displays 0-7 without changing "
-        "computed values. Dates where normalized Brent is zero have no ratio; a constant "
-        "series has no defined ratio."
+        "The original VEA close uses the left axis and normalized VEA divided by "
+        "normalized Brent uses the right axis on the same graph. The ratio axis displays "
+        "0-7 without changing computed values. Dates where normalized Brent is zero have "
+        "no ratio; a constant series has no defined ratio."
     )
     st.plotly_chart(vea_per_crude_chart(shares, overlapping_oil), width="stretch")
 
