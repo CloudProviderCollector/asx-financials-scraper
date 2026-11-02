@@ -113,7 +113,7 @@ def normalized_chart(
     return figure
 
 
-def crude_per_vea_chart(
+def vea_per_crude_chart(
     shares: list[tuple[date, Decimal]], oil: list[tuple[date, Decimal]]
 ) -> go.Figure:
     oil_by_date = dict(oil)
@@ -128,13 +128,18 @@ def crude_per_vea_chart(
             ratios = [
                 (
                     day,
-                    ((oil_value - oil_min) / (oil_max - oil_min))
-                    / ((share_value - share_min) / (share_max - share_min)),
+                    ((share_value - share_min) / (share_max - share_min))
+                    / ((oil_value - oil_min) / (oil_max - oil_min)),
                 )
                 for day, share_value, oil_value in paired
-                if share_value > share_min
+                if oil_value > oil_min
             ]
-    figure = make_subplots(specs=[[{"secondary_y": True}]])
+    figure = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.08,
+    )
     figure.add_trace(
         go.Scatter(
             x=[day for day, _ in shares],
@@ -142,23 +147,25 @@ def crude_per_vea_chart(
             name="VEA.AX close (AUD/share)",
             mode="lines",
         ),
-        secondary_y=False,
+        row=1,
+        col=1,
     )
     figure.add_trace(
         go.Scatter(
             x=[day for day, _ in ratios],
             y=[float(value) for _, value in ratios],
-            name="Normalized Brent / normalized VEA",
+            name="Normalized VEA / normalized Brent",
             mode="lines",
         ),
-        secondary_y=True,
+        row=2,
+        col=1,
     )
-    figure.update_xaxes(title_text="Date")
-    figure.update_yaxes(title_text="VEA close (AUD/share)", secondary_y=False)
+    figure.update_xaxes(title_text="Date", row=2, col=1)
+    figure.update_yaxes(title_text="VEA close (AUD/share)", row=1, col=1)
     figure.update_yaxes(
-        title_text="Normalized Brent / normalized VEA (unitless)", range=[0, 7], secondary_y=True
+        title_text="Normalized VEA / normalized Brent (unitless)", range=[0, 7], row=2, col=1
     )
-    figure.update_layout(hovermode="x unified", height=650)
+    figure.update_layout(hovermode="x unified", height=750)
     return figure
 
 
@@ -200,15 +207,16 @@ def main() -> None:
         "Both lines use one visual scale; this is not a currency conversion."
     )
     st.plotly_chart(normalized_chart(shares, overlapping_oil, ratio), width="stretch")
-    st.subheader("VEA vs normalized Brent / normalized VEA")
+    st.subheader("VEA price and normalized VEA / normalized Brent")
     st.caption(
         "For matching dates, scale each price series independently to [0, 1] using "
         "(price - minimum) / (maximum - minimum) across the entire matched period. "
-        "Divide normalized Brent by normalized VEA on each date; the unitless ratio uses "
-        "the right axis, while the original VEA close uses the left. Dates where "
-        "normalized VEA is zero have no ratio; a constant series has no defined ratio."
+        "The top panel shows the original VEA close; the bottom panel shows normalized "
+        "VEA divided by normalized Brent. The ratio axis displays 0-7 without changing "
+        "computed values. Dates where normalized Brent is zero have no ratio; a constant "
+        "series has no defined ratio."
     )
-    st.plotly_chart(crude_per_vea_chart(shares, overlapping_oil), width="stretch")
+    st.plotly_chart(vea_per_crude_chart(shares, overlapping_oil), width="stretch")
 
 
 if __name__ == "__main__":

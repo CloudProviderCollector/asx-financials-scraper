@@ -61,13 +61,13 @@ Open the local URL printed by Streamlit (typically `http://localhost:8501`) and 
 
 ## VEA and crude oil comparison
 
-Run the read-only, dual-axis Streamlit chart using existing VEA daily closes and the daily FRED/EIA Brent crude benchmark stored in PostgreSQL:
+Run the read-only Streamlit dashboard using existing VEA daily closes and the daily FRED/EIA Brent crude benchmark stored in PostgreSQL:
 
 ```powershell
 uv run streamlit run src\asx_financials\vea_crude_dashboard.py
 ```
 
-The first graph shows VEA.AX close in AUD per share on the left axis and Brent spot in USD per barrel on the right. A second graph plots VEA alongside Brent multiplied by the average of VEA/Brent ratios on matching trading dates across the available period, on a shared visual scale. A third dual-axis graph shows the original VEA close on the left axis and normalized Brent divided by normalized VEA on the right. Each price series is independently scaled to [0, 1] using its minimum and maximum on matching dates over the full available period before division. The ratio axis displays 0–7 for readability; computed values above 7 are retained but outside the visible range. Dates where normalized VEA is zero have no ratio; a constant series cannot be normalized. All graphs use the VEA history date range; unmatched dates are excluded from the ratios but remain visible on their respective price lines. This normalization is not a currency conversion. The dashboard does not fetch missing observations. Ingest VEA and download commodity prices first if either series is empty.
+The first graph shows VEA.AX close in AUD per share on the left axis and Brent spot in USD per barrel on the right. A second graph plots VEA alongside Brent multiplied by the average of VEA/Brent ratios on matching trading dates across the available period, on a shared visual scale. A third graph has two vertically stacked panels with shared dates: original VEA close on top and normalized VEA divided by normalized Brent underneath. Each price series is independently scaled to [0, 1] using its minimum and maximum on matching dates over the full available period before division. The ratio axis displays 0–7 for readability; computed values above 7 are retained but outside the visible range. Dates where normalized Brent is zero have no ratio; a constant series cannot be normalized. All graphs use the VEA history date range; unmatched dates are excluded from the ratios but remain visible on their respective price lines. This normalization is not a currency conversion. The dashboard does not fetch missing observations. Ingest VEA and download commodity prices first if either series is empty.
 
 ## Commodity price history
 
