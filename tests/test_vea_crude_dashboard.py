@@ -95,13 +95,13 @@ def test_vea_per_crude_chart_min_max_scales_matched_prices_before_dividing() -> 
     assert list(figure.data[1].y) == [3.0, 1.0]
     assert figure.layout.yaxis.title.text == "VEA close (AUD/share)"
     assert figure.layout.yaxis2.title.text == "Normalized VEA / normalized Brent (unitless)"
-    assert list(figure.layout.yaxis2.range) == [0, 7]
+    assert figure.layout.yaxis2.range is None
     assert figure.data[0].xaxis == figure.data[1].xaxis == "x"
     assert figure.layout.yaxis2.overlaying == "y"
     assert figure.layout.yaxis2.side == "right"
 
 
-def test_vea_per_crude_chart_limits_axis_without_capping_ratio_values() -> None:
+def test_vea_per_crude_chart_autoscales_without_capping_ratio_values() -> None:
     shares = [
         (date(2026, 1, 2), Decimal("2")),
         (date(2026, 1, 3), Decimal("19")),
@@ -114,7 +114,7 @@ def test_vea_per_crude_chart_limits_axis_without_capping_ratio_values() -> None:
     ]
     figure = vea_per_crude_chart(shares, oil)
     assert list(figure.data[1].y) == [float(Decimal(170) / 3), 1.0]
-    assert list(figure.layout.yaxis2.range) == [0, 7]
+    assert figure.layout.yaxis2.range is None
 
 
 def test_vea_per_crude_chart_skips_constant_series_and_unmatched_dates() -> None:

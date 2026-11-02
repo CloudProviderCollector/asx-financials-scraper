@@ -155,9 +155,7 @@ def vea_per_crude_chart(
     )
     figure.update_xaxes(title_text="Date")
     figure.update_yaxes(title_text="VEA close (AUD/share)", secondary_y=False)
-    figure.update_yaxes(
-        title_text="Normalized VEA / normalized Brent (unitless)", range=[0, 7], secondary_y=True
-    )
+    figure.update_yaxes(title_text="Normalized VEA / normalized Brent (unitless)", secondary_y=True)
     figure.update_layout(hovermode="x unified", height=650)
     return figure
 
@@ -205,9 +203,9 @@ def main() -> None:
         "For matching dates, scale each price series independently to [0, 1] using "
         "(price - minimum) / (maximum - minimum) across the entire matched period. "
         "The original VEA close uses the left axis and normalized VEA divided by "
-        "normalized Brent uses the right axis on the same graph. The ratio axis displays "
-        "0-7 without changing computed values. Dates where normalized Brent is zero have "
-        "no ratio; a constant series has no defined ratio."
+        "normalized Brent uses the right axis on the same graph, which autoscales to "
+        "the computed ratios. Dates where normalized Brent is zero have no ratio; a "
+        "constant series has no defined ratio."
     )
     st.plotly_chart(vea_per_crude_chart(shares, overlapping_oil), width="stretch")
 
