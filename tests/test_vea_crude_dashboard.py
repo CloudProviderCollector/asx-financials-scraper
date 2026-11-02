@@ -72,26 +72,34 @@ def test_normalization_uses_mean_of_same_date_ratios_not_ratio_of_means() -> Non
     assert average_vea_oil_ratio(shares, [(date(2026, 1, 7), Decimal("2"))]) is None
 
 
-def test_crude_per_vea_chart_only_divides_same_day_nonzero_prices() -> None:
+def test_crude_per_vea_chart_min_max_scales_matched_prices_before_dividing() -> None:
     shares = [
         (date(2026, 1, 2), Decimal("2")),
-        (date(2026, 1, 5), Decimal("0")),
-        (date(2026, 1, 6), Decimal("4")),
-        (date(2026, 1, 7), Decimal("5")),
+        (date(2026, 1, 5), Decimal("4")),
+        (date(2026, 1, 6), Decimal("6")),
+        (date(2026, 1, 7), Decimal("20")),
     ]
     oil = [
+        (date(2026, 1, 1), Decimal("1000")),
         (date(2026, 1, 2), Decimal("60")),
         (date(2026, 1, 5), Decimal("70")),
-        (date(2026, 1, 6), Decimal("80")),
+        (date(2026, 1, 6), Decimal("120")),
     ]
     figure = crude_per_vea_chart(shares, oil)
     assert [trace.yaxis for trace in figure.data] == ["y", "y2"]
     assert list(figure.data[0].x) == [day for day, _ in shares]
-    assert list(figure.data[0].y) == [2.0, 0.0, 4.0, 5.0]
-    assert list(figure.data[1].x) == [date(2026, 1, 2), date(2026, 1, 6)]
-    assert list(figure.data[1].y) == [30.0, 20.0]
+    assert list(figure.data[0].y) == [2.0, 4.0, 6.0, 20.0]
+    assert list(figure.data[1].x) == [date(2026, 1, 5), date(2026, 1, 6)]
+    assert list(figure.data[1].y) == [1 / 3, 1.0]
     assert figure.layout.yaxis.title.text == "VEA close (AUD/share)"
-    assert figure.layout.yaxis2.title.text == "Brent / VEA (USD/barrel per AUD/share)"
+    assert figure.layout.yaxis2.title.text == "Normalized Brent / normalized VEA (unitless)"
+
+
+def test_crude_per_vea_chart_skips_constant_series_and_unmatched_dates() -> None:
+    shares = [(date(2026, 1, 2), Decimal("2")), (date(2026, 1, 3), Decimal("4"))]
+    oil = [(date(2026, 1, 2), Decimal("60")), (date(2026, 1, 3), Decimal("60"))]
+    assert list(crude_per_vea_chart(shares, oil).data[1].x) == []
+    assert list(crude_per_vea_chart(shares, []).data[1].x) == []
 
 
 def test_main_limits_oil_history_to_vea_date_range() -> None:
@@ -116,8 +124,8 @@ def test_main_limits_oil_history_to_vea_date_range() -> None:
     assert list(original.data[1].x) == [date(2026, 1, 2)]
     assert list(normalized.data[1].x) == [date(2026, 1, 2)]
     assert list(normalized.data[1].y) == [2.5]
-    assert list(divided.data[1].x) == [date(2026, 1, 2)]
-    assert list(divided.data[1].y) == [26.0]
+    assert list(divided.data[1].x) == []
+    assert list(divided.data[1].y) == []
     assert "1 matching trading dates" in caption.call_args_list[-2].args[0]
     assert all(call.kwargs["width"] == "stretch" for call in plot.call_args_list)
 
