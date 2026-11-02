@@ -67,7 +67,7 @@ Run the read-only, dual-axis Streamlit chart using existing VEA daily closes and
 uv run streamlit run src\asx_financials\vea_crude_dashboard.py
 ```
 
-The first graph shows VEA.AX close in AUD per share on the left axis and Brent spot in USD per barrel on the right. A second graph plots VEA alongside Brent multiplied by the average of VEA/Brent ratios on matching trading dates across the available period, on a shared visual scale. Both graphs use the VEA history date range; unmatched dates are excluded from the average but remain visible on their respective lines. This normalization is not a currency conversion. The dashboard does not fetch missing observations. Ingest VEA and download commodity prices first if either series is empty.
+The first graph shows VEA.AX close in AUD per share on the left axis and Brent spot in USD per barrel on the right. A second graph plots VEA alongside Brent multiplied by the average of VEA/Brent ratios on matching trading dates across the available period, on a shared visual scale. A third dual-axis graph shows VEA on the left axis and Brent crude divided by VEA close on the right, calculated only where both prices exist on the same date and VEA close is positive. All graphs use the VEA history date range; unmatched dates are excluded from the ratios but remain visible on their respective price lines. This normalization is not a currency conversion. The dashboard does not fetch missing observations. Ingest VEA and download commodity prices first if either series is empty.
 
 ## Commodity price history
 

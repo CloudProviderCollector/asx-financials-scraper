@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from asx_financials.vea_crude_dashboard import (
     average_vea_oil_ratio,
     comparison_chart,
+    crude_per_vea_chart,
     load_prices,
     main,
     normalized_chart,
@@ -71,6 +72,28 @@ def test_normalization_uses_mean_of_same_date_ratios_not_ratio_of_means() -> Non
     assert average_vea_oil_ratio(shares, [(date(2026, 1, 7), Decimal("2"))]) is None
 
 
+def test_crude_per_vea_chart_only_divides_same_day_nonzero_prices() -> None:
+    shares = [
+        (date(2026, 1, 2), Decimal("2")),
+        (date(2026, 1, 5), Decimal("0")),
+        (date(2026, 1, 6), Decimal("4")),
+        (date(2026, 1, 7), Decimal("5")),
+    ]
+    oil = [
+        (date(2026, 1, 2), Decimal("60")),
+        (date(2026, 1, 5), Decimal("70")),
+        (date(2026, 1, 6), Decimal("80")),
+    ]
+    figure = crude_per_vea_chart(shares, oil)
+    assert [trace.yaxis for trace in figure.data] == ["y", "y2"]
+    assert list(figure.data[0].x) == [day for day, _ in shares]
+    assert list(figure.data[0].y) == [2.0, 0.0, 4.0, 5.0]
+    assert list(figure.data[1].x) == [date(2026, 1, 2), date(2026, 1, 6)]
+    assert list(figure.data[1].y) == [30.0, 20.0]
+    assert figure.layout.yaxis.title.text == "VEA close (AUD/share)"
+    assert figure.layout.yaxis2.title.text == "Brent / VEA (USD/barrel per AUD/share)"
+
+
 def test_main_limits_oil_history_to_vea_date_range() -> None:
     shares = [(date(2026, 1, 2), Decimal("2.5")), (date(2026, 1, 5), Decimal("2.6"))]
     oil = [
@@ -88,12 +111,14 @@ def test_main_limits_oil_history_to_vea_date_range() -> None:
         patch("asx_financials.vea_crude_dashboard.load_prices", return_value=(shares, oil)),
     ):
         main()
-    assert plot.call_count == 2
-    original, normalized = [call.args[0] for call in plot.call_args_list]
+    assert plot.call_count == 3
+    original, normalized, divided = [call.args[0] for call in plot.call_args_list]
     assert list(original.data[1].x) == [date(2026, 1, 2)]
     assert list(normalized.data[1].x) == [date(2026, 1, 2)]
     assert list(normalized.data[1].y) == [2.5]
-    assert "1 matching trading dates" in caption.call_args_list[-1].args[0]
+    assert list(divided.data[1].x) == [date(2026, 1, 2)]
+    assert list(divided.data[1].y) == [26.0]
+    assert "1 matching trading dates" in caption.call_args_list[-2].args[0]
     assert all(call.kwargs["width"] == "stretch" for call in plot.call_args_list)
 
 

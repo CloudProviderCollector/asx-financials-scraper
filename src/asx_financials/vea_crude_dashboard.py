@@ -113,6 +113,39 @@ def normalized_chart(
     return figure
 
 
+def crude_per_vea_chart(
+    shares: list[tuple[date, Decimal]], oil: list[tuple[date, Decimal]]
+) -> go.Figure:
+    oil_by_date = dict(oil)
+    paired = [
+        (day, oil_by_date[day] / value) for day, value in shares if day in oil_by_date and value > 0
+    ]
+    figure = make_subplots(specs=[[{"secondary_y": True}]])
+    figure.add_trace(
+        go.Scatter(
+            x=[day for day, _ in shares],
+            y=[float(value) for _, value in shares],
+            name="VEA.AX close (AUD/share)",
+            mode="lines",
+        ),
+        secondary_y=False,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=[day for day, _ in paired],
+            y=[float(value) for _, value in paired],
+            name="Brent crude / VEA close",
+            mode="lines",
+        ),
+        secondary_y=True,
+    )
+    figure.update_xaxes(title_text="Date")
+    figure.update_yaxes(title_text="VEA close (AUD/share)", secondary_y=False)
+    figure.update_yaxes(title_text="Brent / VEA (USD/barrel per AUD/share)", secondary_y=True)
+    figure.update_layout(hovermode="x unified", height=650)
+    return figure
+
+
 def main() -> None:
     st.set_page_config(page_title="VEA vs Brent crude", layout="wide")
     st.title("VEA vs Brent crude oil")
@@ -151,6 +184,13 @@ def main() -> None:
         "Both lines use one visual scale; this is not a currency conversion."
     )
     st.plotly_chart(normalized_chart(shares, overlapping_oil, ratio), width="stretch")
+    st.subheader("VEA vs Brent crude / VEA")
+    st.caption(
+        "Brent crude spot (USD/barrel) divided by the VEA closing price (AUD/share) "
+        "on matching dates; the ratio uses the right axis and VEA uses the left. "
+        "This ratio is not currency-adjusted."
+    )
+    st.plotly_chart(crude_per_vea_chart(shares, overlapping_oil), width="stretch")
 
 
 if __name__ == "__main__":
