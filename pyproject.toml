@@ -36,31 +36,31 @@ dev = [
 asx-financials = "asx_financials.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/asx_financials"]
+packages = ["src/asx_financials", "dashboards"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-src = ["src", "tests"]
+src = ["src", "dashboards", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "N", "ASYNC", "RUF"]
 ignore = ["B008"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 
 [tool.mypy]
 python_version = "3.13"
-mypy_path = ["src"]
+mypy_path = ["src", "."]
 check_untyped_defs = true
 disallow_untyped_defs = false
 ignore_missing_imports = true
 disable_error_code = ["attr-defined", "no-any-return"]
 warn_unused_configs = true
-packages = ["asx_financials"]
+packages = ["asx_financials", "dashboards"]
 
 [tool.coverage.run]
-source = ["src/asx_financials"]
+source = ["src/asx_financials", "dashboards"]

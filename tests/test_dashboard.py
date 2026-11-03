@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-from asx_financials.dashboard import (
+from dashboards.dashboard import (
     _daily_prices_view,
     _financial_highlights,
     _format_number,
@@ -13,6 +13,7 @@ from asx_financials.dashboard import (
     load_ticker_data,
     main,
 )
+
 from asx_financials.domain.value_objects import AsxTicker
 
 
@@ -125,9 +126,9 @@ def test_daily_prices_show_chronological_charts_and_formatted_newest_first_table
         },
     ]
     with (
-        patch("asx_financials.dashboard.st.subheader"),
-        patch("asx_financials.dashboard.st.plotly_chart") as plotly_chart,
-        patch("asx_financials.dashboard.st.dataframe") as dataframe,
+        patch("dashboards.dashboard.st.subheader"),
+        patch("dashboards.dashboard.st.plotly_chart") as plotly_chart,
+        patch("dashboards.dashboard.st.dataframe") as dataframe,
     ):
         _daily_prices_view(
             prices,
@@ -162,9 +163,9 @@ def test_daily_prices_show_chronological_charts_and_formatted_newest_first_table
 
 def test_daily_prices_empty_state_does_not_render_charts_or_table():
     with (
-        patch("asx_financials.dashboard.st.info") as info,
-        patch("asx_financials.dashboard.st.plotly_chart") as plotly_chart,
-        patch("asx_financials.dashboard.st.dataframe") as dataframe,
+        patch("dashboards.dashboard.st.info") as info,
+        patch("dashboards.dashboard.st.plotly_chart") as plotly_chart,
+        patch("dashboards.dashboard.st.dataframe") as dataframe,
     ):
         _daily_prices_view([])
     info.assert_called_once()
@@ -191,11 +192,11 @@ def test_daily_history_query_is_scoped_to_asx_and_newest_first():
 
 def test_dashboard_shows_empty_ticker_prompt():
     with (
-        patch("asx_financials.dashboard.st.set_page_config"),
-        patch("asx_financials.dashboard.st.title"),
-        patch("asx_financials.dashboard.st.caption"),
-        patch("asx_financials.dashboard.st.text_input", return_value=""),
-        patch("asx_financials.dashboard.st.info") as info,
+        patch("dashboards.dashboard.st.set_page_config"),
+        patch("dashboards.dashboard.st.title"),
+        patch("dashboards.dashboard.st.caption"),
+        patch("dashboards.dashboard.st.text_input", return_value=""),
+        patch("dashboards.dashboard.st.info") as info,
     ):
         main()
     info.assert_called_once()
@@ -203,12 +204,12 @@ def test_dashboard_shows_empty_ticker_prompt():
 
 def test_dashboard_rejects_invalid_ticker_before_database_access():
     with (
-        patch("asx_financials.dashboard.st.set_page_config"),
-        patch("asx_financials.dashboard.st.title"),
-        patch("asx_financials.dashboard.st.caption"),
-        patch("asx_financials.dashboard.st.text_input", return_value="INVALID-TICKER"),
-        patch("asx_financials.dashboard.st.error") as error,
-        patch("asx_financials.dashboard._engine") as engine,
+        patch("dashboards.dashboard.st.set_page_config"),
+        patch("dashboards.dashboard.st.title"),
+        patch("dashboards.dashboard.st.caption"),
+        patch("dashboards.dashboard.st.text_input", return_value="INVALID-TICKER"),
+        patch("dashboards.dashboard.st.error") as error,
+        patch("dashboards.dashboard._engine") as engine,
     ):
         main()
     error.assert_called_once()

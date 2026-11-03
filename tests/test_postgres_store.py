@@ -8,11 +8,11 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from dashboards.dashboard import load_ticker_data
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DataError, IntegrityError
 
-from asx_financials.dashboard import load_ticker_data
 from asx_financials.domain.enums import IngestionRunStatus, StatementFrequency, StatementType
 from asx_financials.domain.models import (
     AsxListedCompany,
