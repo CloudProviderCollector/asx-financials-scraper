@@ -41,8 +41,8 @@ def test_queries_target_vea_and_daily_brent() -> None:
     assert "daily_prices.close IS NOT NULL OR daily_prices.open IS NOT NULL" in queries[0]
     assert "ORDER BY daily_prices.trading_date" in queries[0]
     assert "FROM commodity_prices" in queries[1]
-    assert "commodity_prices.source = 'FRED/EIA'" in queries[1]
-    assert "commodity_prices.series = 'DCOILBRENTEU'" in queries[1]
+    assert "commodity_prices.source = 'Yahoo Finance'" in queries[1]
+    assert "commodity_prices.series = 'BZ=F'" in queries[1]
     assert "commodity_prices.frequency = 'daily'" in queries[1]
     assert "ORDER BY commodity_prices.observation_date" in queries[1]
 
@@ -57,7 +57,7 @@ def test_comparison_chart_has_shared_dates_and_separate_units() -> None:
     assert list(figure.data[1].y) == [65.0, 66.0]
     assert list(figure.data[0].x) == list(figure.data[1].x)
     assert figure.layout.yaxis.title.text == "VEA close (AUD/share)"
-    assert figure.layout.yaxis2.title.text == "Brent crude (USD/barrel)"
+    assert figure.layout.yaxis2.title.text == "BZ=F Brent futures close (USD/barrel)"
 
 
 def test_normalization_uses_mean_of_same_date_ratios_not_ratio_of_means() -> None:

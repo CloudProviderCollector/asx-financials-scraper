@@ -3,13 +3,22 @@
 import io
 from datetime import date
 from decimal import Decimal
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import pytest
 from openpyxl import Workbook
 from sqlalchemy.dialects import postgresql
 
-from asx_financials.download_commodity_prices import price, read_fred, read_world_bank, save_prices
+from asx_financials.download_commodity_prices import (
+    DAILY_SERIES,
+    download,
+    price,
+    read_fred,
+    read_world_bank,
+    read_yahoo_futures,
+    save_prices,
+)
 
 
 def test_fred_skips_missing_days_and_rejects_wrong_series() -> None:
@@ -24,6 +33,53 @@ def test_fred_skips_missing_days_and_rejects_wrong_series() -> None:
     assert price(".") is None
     assert price("NaN") is None
     assert price("0") is None
+
+
+def test_yahoo_brent_futures_rows_preserve_source_and_skip_invalid_closes() -> None:
+    frame = pd.DataFrame(
+        {"Close": [94.62, None, 0]},
+        index=pd.to_datetime(["2026-11-04", "2026-11-05", "2026-11-06"]),
+    )
+    with patch("asx_financials.download_commodity_prices.yf.Ticker") as ticker:
+        ticker.return_value.history.return_value = frame
+        rows = read_yahoo_futures("BZ=F", "crude_brent_futures", "USD/barrel")
+    ticker.assert_called_once_with("BZ=F")
+    ticker.return_value.history.assert_called_once_with(period="max", auto_adjust=False)
+    assert rows == [
+        {
+            "date": "2026-11-04",
+            "commodity": "crude_brent_futures",
+            "frequency": "daily",
+            "price": "94.62",
+            "unit": "USD/barrel",
+            "source": "Yahoo Finance",
+            "series": "BZ=F",
+        }
+    ]
+    assert "crude_brent_daily" not in DAILY_SERIES
+
+
+def test_download_saves_brent_futures_and_gold_without_fred_brent() -> None:
+    with (
+        patch("asx_financials.download_commodity_prices.fetch", return_value=b"unused"),
+        patch(
+            "asx_financials.download_commodity_prices.read_fred",
+            return_value=[{"date": "2026-11-04"}],
+        ) as fred,
+        patch(
+            "asx_financials.download_commodity_prices.read_yahoo_futures",
+            return_value=[{"date": "2026-11-04"}],
+        ) as yahoo,
+        patch("asx_financials.download_commodity_prices.read_world_bank", return_value={}),
+        patch("asx_financials.download_commodity_prices.save_prices") as save,
+    ):
+        download(MagicMock())
+    assert [call.args[1] for call in fred.call_args_list] == ["DCOILWTICO", "DJFUELUSGULF"]
+    assert [call.args[:3] for call in yahoo.call_args_list] == [
+        ("BZ=F", "crude_brent_futures", "USD/barrel"),
+        ("GC=F", "gold_comex_futures", "USD/troy_oz"),
+    ]
+    assert save.call_count == 4
 
 
 def test_world_bank_monthly_gold_and_crude_parsing() -> None:

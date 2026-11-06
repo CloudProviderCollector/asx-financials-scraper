@@ -56,8 +56,8 @@ def load_prices(
         oil = connection.execute(
             select(commodity_prices.c.observation_date, commodity_prices.c.price)
             .where(
-                commodity_prices.c.source == "FRED/EIA",
-                commodity_prices.c.series == "DCOILBRENTEU",
+                commodity_prices.c.source == "Yahoo Finance",
+                commodity_prices.c.series == "BZ=F",
                 commodity_prices.c.frequency == "daily",
             )
             .order_by(commodity_prices.c.observation_date)
@@ -90,14 +90,14 @@ def comparison_chart(
         go.Scatter(
             x=[day for day, _ in oil],
             y=[float(value) for _, value in oil],
-            name="Brent crude (USD/barrel)",
+            name="BZ=F Brent futures close (USD/barrel)",
             mode="lines",
         ),
         secondary_y=True,
     )
     figure.update_xaxes(title_text="Date")
     figure.update_yaxes(title_text="VEA close (AUD/share)", secondary_y=False)
-    figure.update_yaxes(title_text="Brent crude (USD/barrel)", secondary_y=True)
+    figure.update_yaxes(title_text="BZ=F Brent futures close (USD/barrel)", secondary_y=True)
     figure.update_layout(hovermode="x unified", height=650)
     return figure
 
@@ -132,7 +132,7 @@ def normalized_chart(
         go.Scatter(
             x=[day for day, _ in oil],
             y=[float(value * ratio) for _, value in oil],
-            name="Brent crude scaled by average VEA/Brent ratio",
+            name="BZ=F Brent futures scaled by average VEA/Brent ratio",
             mode="lines",
         )
     )
@@ -454,10 +454,10 @@ def display_trade_results(
 
 
 def main() -> None:
-    st.set_page_config(page_title="VEA vs Brent crude", layout="wide")
-    st.title("VEA vs Brent crude oil")
+    st.set_page_config(page_title="VEA vs Brent crude (unadjusted)", layout="wide")
+    st.title("VEA vs Brent crude oil (unadjusted close)")
     st.caption(
-        "VEA.AX daily closing share price (AUD, left axis) and FRED/EIA Brent crude spot "
+        "VEA.AX daily closing share price (AUD, left axis) and Yahoo BZ=F Brent futures close "
         "(USD/barrel, right axis). Dates are shared; values are not currency-converted. "
         "This page reads stored PostgreSQL data only."
     )

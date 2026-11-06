@@ -26,7 +26,6 @@ WORLD_BANK_URL = (
 # as of 2026-11-01. Update this URL when it publishes a newer historical workbook.
 DAILY_SERIES = {
     "crude_wti_daily": ("DCOILWTICO", "crude_wti", "USD/barrel"),
-    "crude_brent_daily": ("DCOILBRENTEU", "crude_brent", "USD/barrel"),
     "jet_fuel_us_gulf_coast_daily": (
         "DJFUELUSGULF",
         "jet_fuel_us_gulf_coast",
@@ -121,11 +120,10 @@ def read_world_bank(content: bytes) -> dict[str, list[dict[str, str]]]:
         book.close()
 
 
-def read_gold_futures() -> list[dict[str, str]]:
-    """Yahoo's GC=F is a COMEX futures close, not a physical gold spot fixing."""
-    frame = yf.Ticker("GC=F").history(period="max", auto_adjust=False)
+def read_yahoo_futures(ticker: str, commodity: str, unit: str) -> list[dict[str, str]]:
+    frame = yf.Ticker(ticker).history(period="max", auto_adjust=False)
     if frame.empty or "Close" not in frame:
-        raise ValueError("Yahoo returned no GC=F daily futures closes")
+        raise ValueError(f"Yahoo returned no {ticker} daily futures closes")
     rows = []
     for stamp, value in frame["Close"].items():
         amount = price(value)
@@ -136,20 +134,25 @@ def read_gold_futures() -> list[dict[str, str]]:
                         FIELDS,
                         (
                             stamp.date().isoformat(),
-                            "gold_comex_futures",
+                            commodity,
                             "daily",
                             amount,
-                            "USD/troy_oz",
+                            unit,
                             "Yahoo Finance",
-                            "GC=F",
+                            ticker,
                         ),
                         strict=True,
                     )
                 )
             )
     if not rows:
-        raise ValueError("Yahoo returned no valid GC=F daily futures closes")
+        raise ValueError(f"Yahoo returned no valid {ticker} daily futures closes")
     return rows
+
+
+def read_gold_futures() -> list[dict[str, str]]:
+    """Yahoo's GC=F is a COMEX futures close, not a physical gold spot fixing."""
+    return read_yahoo_futures("GC=F", "gold_comex_futures", "USD/troy_oz")
 
 
 def save_prices(engine: Engine, rows: list[dict[str, str]]) -> None:
@@ -193,15 +196,16 @@ def download(engine: Engine) -> None:
             print(f"{name}: {len(rows)} observations, {rows[0]['date']} to {rows[-1]['date']}")
         except (requests.RequestException, OSError, ValueError) as exc:
             errors.append(f"{name}: {exc}")
-    try:
-        rows = read_gold_futures()
-        save_prices(engine, rows)
-        print(
-            f"gold_comex_futures_daily: {len(rows)} observations, "
-            f"{rows[0]['date']} to {rows[-1]['date']}"
-        )
-    except (OSError, ValueError, KeyError) as exc:
-        errors.append(f"Yahoo GC=F futures: {exc}")
+    for name, ticker, commodity, unit in (
+        ("crude_brent_futures_daily", "BZ=F", "crude_brent_futures", "USD/barrel"),
+        ("gold_comex_futures_daily", "GC=F", "gold_comex_futures", "USD/troy_oz"),
+    ):
+        try:
+            rows = read_yahoo_futures(ticker, commodity, unit)
+            save_prices(engine, rows)
+            print(f"{name}: {len(rows)} observations, {rows[0]['date']} to {rows[-1]['date']}")
+        except (OSError, ValueError, KeyError) as exc:
+            errors.append(f"Yahoo {ticker} futures: {exc}")
     try:
         for name, rows in read_world_bank(fetch(WORLD_BANK_URL)).items():
             save_prices(engine, rows)
