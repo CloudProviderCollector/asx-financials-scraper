@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 from statistics import median
-from typing import cast
+from typing import Literal, cast
 
 import plotly.graph_objects as go
 import streamlit as st
@@ -13,6 +13,7 @@ from sqlalchemy import Engine, create_engine, or_, select
 
 from asx_financials.config import get_settings
 from asx_financials.infrastructure.persistence.schema import commodity_prices, daily_prices
+from asx_financials.vea_crude_refresh import BRENT_SOURCE, BRENT_SYMBOL
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,19 @@ class Trade:
     @property
     def holding_days(self) -> int:
         return (self.sell_date - self.buy_date).days
+
+
+@dataclass(frozen=True)
+class StrategySignal:
+    pending_action: Literal["buy", "sell"] | None
+    open_buy_date: date | None
+    preparing_to_sell: bool
+
+
+@dataclass(frozen=True)
+class LatestStrategySignals:
+    matched_date: date | None
+    strategies: dict[int, StrategySignal]
 
 
 @st.cache_resource
@@ -56,8 +70,8 @@ def load_prices(
         oil = connection.execute(
             select(commodity_prices.c.observation_date, commodity_prices.c.price)
             .where(
-                commodity_prices.c.source == "Yahoo Finance",
-                commodity_prices.c.series == "BZ=F",
+                commodity_prices.c.source == BRENT_SOURCE,
+                commodity_prices.c.series == BRENT_SYMBOL,
                 commodity_prices.c.frequency == "daily",
             )
             .order_by(commodity_prices.c.observation_date)
@@ -191,16 +205,16 @@ def _meets_threshold(
     )
 
 
-def backtest_trades(
+def _evaluate_trades(
     shares: list[tuple[date, Decimal]],
     opens: dict[date, Decimal],
     ratios: list[tuple[date, Decimal]],
     *,
     staged_sell: bool = False,
     confirm_two_days: bool = False,
-) -> tuple[list[Trade], date | None]:
+) -> tuple[list[Trade], StrategySignal]:
     if not ratios:
-        return [], None
+        return [], StrategySignal(None, None, False)
     values = [value for _, value in ratios]
     buy_below = _percentile(values, Decimal("0.15865"))
     sell_above = _percentile(values, Decimal("0.35"))
@@ -209,7 +223,7 @@ def backtest_trades(
     trades: list[Trade] = []
     position: tuple[date, Decimal] | None = None
     preparing_to_sell = False
-    pending: str | None = None
+    pending: Literal["buy", "sell"] | None = None
     previous: Decimal | None = None
     for day in sorted({day for day, _ in shares} | opens.keys()):
         open_price = opens.get(day)
@@ -269,7 +283,56 @@ def backtest_trades(
                 elif value > sell_above:
                     pending = "sell"
         previous = None if stage_changed else value
-    return trades, position[0] if position is not None else None
+    return trades, StrategySignal(
+        pending,
+        position[0] if position is not None else None,
+        preparing_to_sell,
+    )
+
+
+def backtest_trades(
+    shares: list[tuple[date, Decimal]],
+    opens: dict[date, Decimal],
+    ratios: list[tuple[date, Decimal]],
+    *,
+    staged_sell: bool = False,
+    confirm_two_days: bool = False,
+) -> tuple[list[Trade], date | None]:
+    trades, state = _evaluate_trades(
+        shares, opens, ratios, staged_sell=staged_sell, confirm_two_days=confirm_two_days
+    )
+    return trades, state.open_buy_date
+
+
+def latest_strategy_signals(
+    shares: list[tuple[date, Decimal]],
+    oil: list[tuple[date, Decimal]],
+    opens: dict[date, Decimal],
+) -> LatestStrategySignals:
+    """Evaluate next-open orders on the supplied, already cutoff-limited price history.
+
+    Callers must exclude all prices after their selected cutoff from all three inputs.
+    matched_date is the last date with a defined normalized ratio. Normalization and
+    percentile thresholds use the entire supplied matched history.
+    A pending action is an order for the next trading open, not an executed trade;
+    prepare-to-sell is a stage change, not a pending sale.
+    """
+    ratios = _normalized_ratios(shares, oil)
+    matched_date = max((day for day, _ in ratios), default=None)
+    last_trading_date = max({day for day, _ in shares} | opens.keys(), default=None)
+    strategies = {}
+    for number, staged_sell, confirm_two_days in (
+        (1, False, False),
+        (2, True, False),
+        (3, True, True),
+    ):
+        _, state = _evaluate_trades(
+            shares, opens, ratios, staged_sell=staged_sell, confirm_two_days=confirm_two_days
+        )
+        if matched_date != last_trading_date:
+            state = StrategySignal(None, state.open_buy_date, state.preparing_to_sell)
+        strategies[number] = state
+    return LatestStrategySignals(matched_date, strategies)
 
 
 def trade_summary(trades: list[Trade]) -> tuple[Decimal, Decimal]:

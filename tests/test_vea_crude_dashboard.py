@@ -5,12 +5,14 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 from dashboards.vea_crude_dashboard import (
+    StrategySignal,
     Trade,
     _normalized_ratios,
     average_vea_oil_ratio,
     backtest_trades,
     comparison_chart,
     fund_utilization,
+    latest_strategy_signals,
     load_prices,
     main,
     normalized_chart,
@@ -475,6 +477,107 @@ def test_confirmed_strategy_skips_missing_execution_open_and_strict_equality() -
         [],
         None,
     )
+
+
+def test_latest_signals_use_normalized_ratios_and_report_pending_next_open() -> None:
+    days = [date(2026, 1, day) for day in (2, 5, 6, 7)]
+    shares = list(zip(days, map(Decimal, [1, 2, 3, 4]), strict=True))
+    oil = list(zip(days, map(Decimal, [4, 3, 2, 1]), strict=True))
+    opens = {day: Decimal(10) for day in days[:-1]}
+    result = latest_strategy_signals(shares, oil, opens)
+    assert result.matched_date == days[-2]
+    assert set(result.strategies) == {1, 2, 3}
+    assert all(
+        state.pending_action in (None, "buy", "sell") for state in result.strategies.values()
+    )
+    # The same exact ratio series and execution state drive both the public backtest and signals.
+    ratios = _normalized_ratios(shares, oil)
+    for number in (1, 2, 3):
+        _, open_buy_date = backtest_trades(
+            shares, opens, ratios, staged_sell=number != 1, confirm_two_days=number == 3
+        )
+        assert result.strategies[number].open_buy_date == open_buy_date
+
+
+def test_latest_signals_buy_only_on_last_valid_shared_ratio() -> None:
+    days = [date(2026, 1, day) for day in (2, 5, 6, 7)]
+    shares = list(zip(days, map(Decimal, [1, 3, 2, 4]), strict=True))
+    oil = list(zip(days, map(Decimal, [1, 2, 3, 0]), strict=True))
+    opens = {days[0]: Decimal(10)}
+    result = latest_strategy_signals(shares[:3], oil[:3], opens)
+    assert result.matched_date == days[2]
+    assert result.strategies == {
+        1: StrategySignal("buy", None, False),
+        2: StrategySignal("buy", None, False),
+        3: StrategySignal(None, None, False),
+    }
+    # The final shared date has minimum normalized Brent, so no ratio or fresh order.
+    result = latest_strategy_signals(shares, oil, opens)
+    assert result.matched_date == days[2]
+    assert all(state.pending_action is None for state in result.strategies.values())
+
+
+def test_latest_signals_staged_sell_and_confirmed_stage_are_not_orders() -> None:
+    days = [date(2026, 1, day) for day in (2, 5, 6, 7, 8, 9, 12, 13)]
+    shares = [(day, Decimal(10)) for day in days]
+    oil = [(day, Decimal(10)) for day in days]
+    opens = {day: Decimal(10) for day in days}
+    values = [0, 0, 20, 40, 40, 40, 80, 80]
+    with (
+        patch("dashboards.vea_crude_dashboard._normalized_ratios") as normalized,
+        patch("dashboards.vea_crude_dashboard._percentile") as percentile,
+    ):
+        percentile.side_effect = lambda _values, fraction: {
+            Decimal("0.15865"): Decimal(15),
+            Decimal("0.35"): Decimal(35),
+            Decimal("0.65"): Decimal(65),
+        }[fraction]
+        for end in (0, 4, 5, 6, 7):
+            normalized.return_value = list(
+                zip(days[: end + 1], map(Decimal, values[: end + 1]), strict=True)
+            )
+            signals = latest_strategy_signals(
+                shares[: end + 1],
+                oil[: end + 1],
+                {day: opens[day] for day in days[: end + 1]},
+            ).strategies
+            if end == 0:
+                assert signals[1].pending_action == "buy"
+                assert signals[2].pending_action == "buy"
+                assert signals[3].pending_action is None
+            elif end == 4:
+                assert signals[2] == StrategySignal(None, days[1], True)
+                assert signals[3] == StrategySignal(None, days[2], True)
+            elif end == 5:
+                assert signals[3] == StrategySignal(None, days[2], True)
+            elif end == 6:
+                assert signals[2].pending_action == "sell"
+                assert signals[3].pending_action is None
+            else:
+                assert signals[3].pending_action == "sell"
+
+
+def test_latest_signals_ignore_stale_or_invalid_matching_dates() -> None:
+    days = [date(2026, 1, day) for day in (2, 5, 6, 7)]
+    shares = [(day, Decimal(10)) for day in days]
+    oil = [(day, Decimal(10)) for day in days[:3]]
+    opens = {day: Decimal(10) for day in days}
+    with patch("dashboards.vea_crude_dashboard._normalized_ratios") as normalized:
+        normalized.return_value = [
+            (days[0], Decimal(100)),
+            (days[1], Decimal(100)),
+            (days[2], Decimal(0)),
+        ]
+        result = latest_strategy_signals(shares, oil, opens)
+        assert result.matched_date == days[2]
+        assert all(signal.pending_action is None for signal in result.strategies.values())
+        normalized.return_value = []
+        empty = latest_strategy_signals(shares[:3], oil, opens)
+        assert empty.matched_date is None
+        assert empty.strategies == {
+            number: StrategySignal(None, None, False) for number in (1, 2, 3)
+        }
+    assert latest_strategy_signals([], [], {}).matched_date is None
 
 
 def test_main_limits_oil_history_to_vea_date_range() -> None:
