@@ -59,6 +59,133 @@ uv run streamlit run dashboards\dashboard.py
 
 Open the local URL printed by Streamlit (typically `http://localhost:8501`) and enter an ASX ticker. The dashboard reads existing PostgreSQL data from `DATABASE_URL` in `.env`, showing a company overview (business description, market data, valuation, financial performance, balance sheet, cash flow, dividends, ownership, statement coverage and highlights), the complete saved profile, statement revisions, financial facts, raw responses, ingestion runs, and historical daily prices and share volumes. The Daily prices & volume tab combines closing prices (including derived adjusted close) and volume bars in one chart with a shared date axis, above the OHLCV history table. It does not scrape or modify data; ingest a ticker with the CLI first if it has no stored records.
 
+## VGN and QAN price comparison
+
+Run the read-only dashboard to compare stored Virgin Australia (VGN) and Qantas (QAN)
+daily unadjusted closing share prices. The first graph uses separate AUD-per-share axes
+(VGN left, QAN right); the second shows both series independently min-max normalized
+to 0–1 over the displayed period (a constant series stays at 0). A third graph
+shows the raw VGN close on the left AUD/share axis and the same-day ratio of
+independently normalized VGN close to normalized QAN close on the right dimensionless
+logarithmic ratio axis (the left raw VGN price axis stays linear), using the second
+graph's VGN-period normalization. The ratio skips dates without both normalized
+closes or with a zero normalized QAN value (including the QAN minimum or a constant
+QAN series); zero, negative and nonfinite ratios cannot appear on the log axis,
+and gaps are not joined. A fourth graph
+shows a 20-bucket histogram of the natural logarithm ln(ratio) for positive finite
+ratios from the third graph. Zero, negative, missing, and nonfinite ratios cannot
+be logged and are excluded; the horizontal axis is ln(normalized VGN/QAN ratio)
+and the vertical axis counts trading dates. A red line marks the median of those
+logged values. Green lines mark median ±1 population standard deviation and
+orange lines mark median ±2 population standard deviations. All five marker lines
+are dotted; the standard deviation
+is calculated from the logged observations, not the unlogged ratio, and the offsets
+are around the median rather than the mean. For one observation or a constant
+sample, only the median line is shown (σ lines would overlap it); if none qualify,
+it shows a message instead:
+
+```powershell
+uv run streamlit run dashboards\vgn_qan_dashboard.py
+```
+
+A fifth graph backtests a VGN-only strategy over the same VGN period. A logged
+ratio strictly below median −2 population standard deviations signals a buy;
+a logged ratio strictly above median −1 standard deviation signals a sell.
+Each signal executes at the next VGN trading day's positive opening price, not
+at the signal's closing price. Red dotted vertical lines mark executed buys and
+green dotted lines mark executed sells on the VGN closing-price graph. A table
+lists completed trades with signal and execution dates, opening prices, holding
+days and percentage profit/loss. The summary shows the compounded percentage
+return from completed trades and fund utilization: calendar days held (buy date
+inclusive, sell date exclusive, including an open position through the final
+VGN close) divided by all calendar days of the displayed VGN period. Only one
+position is held at a time; missing or invalid opens cancel pending orders and
+dates without a valid logged ratio cannot signal. Unclosed positions are marked
+and counted toward utilization but excluded from realized returns. Signals on
+the final day remain unexecuted. The normalization and thresholds are computed
+using the *entire* displayed period, introducing look-ahead bias; this is an
+illustrative retrospective backtest, not a deployable live strategy. Returns
+exclude fees, slippage, dividends and corporate-action adjustments.
+
+A separate rolling linear-spread Z-score strategy compares VGN (A) with QAN (B).
+It fits one fixed slope β by regressing VGN on QAN using ordinary least squares
+*with an intercept* over **all** overlapping positive finite VGN-period daily
+closes (at least two pairs). The spread is `VGN close − β × QAN close` in AUD/share
+(the fitted intercept is **not** subtracted). On each date, the historical
+reference spreads use that same fixed β on all matched pairs from the previous
+365 calendar days, excluding the signal date. Their mean and **population**
+standard deviation define the current close's Z-score. There is no signal when
+fewer than 20 matched prior days exist, QAN has negligible full-sample variance,
+the spread SD is zero, or prices are missing/invalid; this can suppress early
+VGN-history trades. The fixed β uses future prices on earlier dates and thus
+introduces **look-ahead bias** to historical backtests, although the rolling
+spread reference excludes the current and future dates. A separate graph plots
+the fixed dimensionless β as a horizontal line; another overlays VGN close and
+that day's fixed β × QAN close on a shared AUD/share axis. Both show gaps when
+either close is missing/invalid. β can be negative, so β × QAN can also be
+negative; a zero spread SD suppresses the Z-score but does not suppress a valid
+β. A graph plots raw spread (left axis) and
+Z-score (right axis) with dotted −2 buy and −1 sell thresholds; both axes share
+VGN's date range. The strategy buys VGN on a strict Z < −2 and sells on a strict
+Z > −1, at the *next* VGN trading day's positive open. A separate VGN-price plot
+marks executed buys red and sells green with dotted vertical lines, followed by
+a completed-trades table, compounded return and calendar-day fund utilization.
+It holds at most one position; invalid next opens cancel pending orders and open
+positions count toward utilization but not realized return. The underlying daily
+closes are unadjusted; fees, slippage, dividends and corporate actions are not
+included. Unlike the rolling reference, the fixed hedge ratio is estimated from
+the entire sample, so this remains a look-ahead-biased retrospective illustration.
+
+A separate **two-sided paired spread strategy** uses the same fixed full-sample
+intercept-fitted β, but computes one full-sample mean and *population* standard
+deviation from all eligible overlapping VGN-period daily spreads
+`VGN close − β × QAN close` (the fitted intercept is omitted). The resulting
+full-sample Z-score requires at least two spreads and nonzero variance. A
+20-equal-width-bucket histogram counts eligible **raw spreads (AUD/share)** used
+for the full-sample reference, with dotted lines for the mean, mean ±1.5
+population SD (entries), and mean ±0.5 population SD (exits). A constant
+spread is shown in a centered bucket without misleading threshold lines; an
+empty series produces a message. The spread/Z-score chart shows dotted ±1.5
+entry and ±0.5 exit thresholds; red dotted execution-entry lines and green
+dotted execution-exit lines appear on both that chart and the VGN price chart.
+Up/down triangle markers on the price chart distinguish long/short VGN trades
+in the legend. The paired-trade price chart overlays VGN closing price on the
+left AUD/share axis and the same fixed β times date-aligned QAN closing price
+on the right **linear** AUD/share axis (which can be negative for negative β);
+missing/invalid QAN prices or β leave gaps, and execution markers remain on
+VGN's axis. A strict
+Z < −1.5 opens long one VGN share and short β QAN
+shares, closing at strict Z > −0.5; strict Z > +1.5 opens short one VGN share
+and long β QAN shares, closing at strict Z < +0.5. Signed β quantities are
+used, so if β is negative, the QAN position's actual side reverses. There is
+only one position at a time, with no same-bar reversal. Signals occur at
+paired daily **closes**; **both** legs fill together at the next common
+trading day's positive finite VGN and QAN **opens**, never at the triggering
+close or on the same calendar day. Weekends/holidays and unmatched or invalid
+opens defer the order to a later common eligible open without filling one leg.
+An unfilled terminal signal is not a trade. Completed-trade rows show signal and
+execution dates, direction, both legs' entry/exit open prices, each leg's and
+net AUD P&L, net percentage return, and holding days measured as calendar days
+from entry execution inclusive to exit execution exclusive. For signed quantities (+1, −β) on
+the long side or (−1, +β) on the short side, each leg's P&L is its quantity
+times `(exit open − entry open)`. Net percentage return divides net P&L by
+gross opening exposure `|VGN entry open| + |β × QAN entry open|`. The summary
+compounds completed-trade net returns; fund utilization counts calendar days
+from entry inclusive to exit exclusive, counting any open position through the
+last VGN date. Open positions are disclosed separately, without unrealized
+returns. Trading fees, borrow costs, slippage, dividends and corporate actions
+are excluded. **Both β and the full-sample mean/SD use future data for earlier
+signals, so this is a look-ahead-biased retrospective illustration, not a
+prospective performance estimate.** The original prior-365-day rolling-reference
+strategy remains independent.
+
+All graphs read PostgreSQL through `DATABASE_URL` and do not fetch missing data. They
+show only dates from VGN's first to last stored trading day; older QAN prices remain
+in PostgreSQL but are excluded from these graphs. Ingest both tickers first with
+`uv run asx-financials ingest VGN` and `uv run asx-financials ingest QAN`. If QAN has
+no stored closes, the dashboard warns and shows VGN alone. If VGN has no stored
+closes, it warns and does not show a chart because there is no comparison period.
+
 ## VEA and crude oil comparison
 
 Run the read-only Streamlit dashboard using unadjusted VEA daily closes and the daily Yahoo Finance `BZ=F` Brent futures closes stored in PostgreSQL:
@@ -72,6 +199,16 @@ The first graph shows VEA.AX unadjusted close in AUD per share on the left axis 
 ### Dividend-adjusted VEA and crude oil comparison
 
 Run the separate dividend-adjusted version with `uv run streamlit run dashboards\vea_crude_adjusted_dashboard.py --server.port 8503`. It includes the same graphs, ratios, three strategy backtests, and execution markers, but derives VEA dividend-adjusted closes from stored corporate actions and adjusts backtest opens for dividends and subsequent splits. Results depend on complete corporate-action history; adjusted returns are not cash-dividend payments.
+
+## VGN and Brent futures spread dashboard
+
+Run the read-only dashboard after ingesting VGN.AX and loading Yahoo Finance's daily `BZ=F` Brent futures closes:
+
+```powershell
+uv run streamlit run dashboards\vgn_brent_dashboard.py
+```
+
+The dashboard fits one intercept-fitted VGN-on-Brent slope using **matching positive closes from 1 July 2018 through 31 July 2023 inclusive**. It plots VGN and Brent prices on separate axes, the raw `VGN - beta * Brent` spread and Z-score, and a 20-bin reference-period spread histogram. The reference-period mean and population standard deviation remain fixed when scoring later dates. This follows the VGN/QAN full-sample spread method, but fixes its fitting window so post-July-2023 scores do not use future data. Reference-period scores are in-sample and have look-ahead bias. VGN trades only after the reference period: buy following a close with Z < -1.5, sell following Z > -0.5, at the next VGN trading session's positive open. Missing opens cancel orders, and unmatched Brent dates cannot signal. Only completed VGN trades contribute to compounded returns; fees, dividends, slippage and corporate-action adjustments are excluded. The futures series has no opening prices here, so Brent is **not traded**. The mixed AUD/share and USD/barrel spread is a statistical comparison, not currency conversion or an investable hedge. No data is fetched by the dashboard.
 
 ## Daily VEA/Brent Hatchet alerts
 
