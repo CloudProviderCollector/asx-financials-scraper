@@ -200,16 +200,6 @@ The first graph shows VEA.AX unadjusted close in AUD per share on the left axis 
 
 Run the separate dividend-adjusted version with `uv run streamlit run dashboards\vea_crude_adjusted_dashboard.py --server.port 8503`. It includes the same graphs, ratios, three strategy backtests, and execution markers, but derives VEA dividend-adjusted closes from stored corporate actions and adjusts backtest opens for dividends and subsequent splits. Results depend on complete corporate-action history; adjusted returns are not cash-dividend payments.
 
-## VGN and Brent futures spread dashboard
-
-Run the read-only dashboard after ingesting VGN.AX and loading Yahoo Finance's daily `BZ=F` Brent futures closes:
-
-```powershell
-uv run streamlit run dashboards\vgn_brent_dashboard.py
-```
-
-The dashboard fits one intercept-fitted VGN-on-Brent slope using **matching positive closes from 1 July 2018 through 31 July 2023 inclusive**. It plots VGN and Brent prices on separate axes, the raw `VGN - beta * Brent` spread and Z-score, and a 20-bin reference-period spread histogram. The reference-period mean and population standard deviation remain fixed when scoring later dates. This follows the VGN/QAN full-sample spread method, but fixes its fitting window so post-July-2023 scores do not use future data. Reference-period scores are in-sample and have look-ahead bias. VGN trades only after the reference period: buy following a close with Z < -1.5, sell following Z > -0.5, at the next VGN trading session's positive open. Missing opens cancel orders, and unmatched Brent dates cannot signal. Only completed VGN trades contribute to compounded returns; fees, dividends, slippage and corporate-action adjustments are excluded. The futures series has no opening prices here, so Brent is **not traded**. The mixed AUD/share and USD/barrel spread is a statistical comparison, not currency conversion or an investable hedge. No data is fetched by the dashboard.
-
 ## Daily VEA/Brent Hatchet alerts
 
 A self-hosted Hatchet worker refreshes only VEA.AX (Yahoo) and Yahoo Finance BZ=F Brent futures (not EIA spot) through **yesterday in Australia/Sydney**, then evaluates the dashboard's three strategies on the latest matched observation. It reports pending buy/sell orders for the next available VEA open, **not executed trades**. It does not place orders. The threshold normalization and percentile calculations use the full supplied historical window (look-ahead bias); treat alerts as indicative, not investment advice. Yahoo Brent futures history is loaded on first run; the daily refresh updates that series, leaving older FRED/EIA spot rows untouched. A missing feed triggers an alert after five ASX trading sessions without an observation, once per last-published date while it remains stale (or once when no observations exist). Strategy signals recur on each new evaluation date while active.
