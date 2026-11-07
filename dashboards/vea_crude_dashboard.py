@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
+from math import log
 from statistics import median
 from typing import Literal, cast
 
@@ -384,8 +385,9 @@ def trade_chart(
 
 
 def ratio_histogram(ratios: list[tuple[date, Decimal]]) -> go.Figure:
-    values = [float(value) for _, value in ratios]
-    histogram = go.Histogram(x=values, name="Normalized VEA / normalized Brent")
+    ratio_values = [value for _, value in ratios if value > 0]
+    values = [log(float(value)) for value in ratio_values]
+    histogram = go.Histogram(x=values, name="log(normalized VEA / normalized Brent)")
     if values:
         minimum, maximum = min(values), max(values)
         if minimum == maximum:
@@ -395,9 +397,8 @@ def ratio_histogram(ratios: list[tuple[date, Decimal]]) -> go.Figure:
             start, end = minimum - margin, maximum + margin
         histogram.xbins = {"start": start, "end": end, "size": (end - start) / 20}
     figure = go.Figure(histogram)
-    if ratios:
-        ratio_values = [value for _, value in ratios]
-        figure.add_vline(x=float(median(ratio_values)), line_color="red", line_dash="dash")
+    if ratio_values:
+        figure.add_vline(x=log(float(median(ratio_values))), line_color="red", line_dash="dash")
         for percentile, color in (
             (Decimal("0.15865"), "orange"),
             (Decimal("0.84135"), "orange"),
@@ -405,11 +406,11 @@ def ratio_histogram(ratios: list[tuple[date, Decimal]]) -> go.Figure:
             (Decimal("0.65"), "green"),
         ):
             figure.add_vline(
-                x=float(_percentile(ratio_values, percentile)),
+                x=log(float(_percentile(ratio_values, percentile))),
                 line_color=color,
                 line_dash="dash",
             )
-    figure.update_xaxes(title_text="Normalized VEA / normalized Brent (unitless)")
+    figure.update_xaxes(title_text="log(normalized VEA / normalized Brent) (unitless)")
     figure.update_yaxes(title_text="Number of trading dates")
     figure.update_layout(height=500, bargap=0.05)
     return figure
@@ -568,9 +569,10 @@ def main() -> None:
     )
     ratios = _normalized_ratios(shares, overlapping_oil)
     st.plotly_chart(vea_per_crude_chart(shares, overlapping_oil, ratios), width="stretch")
-    st.subheader("Distribution of normalized VEA / normalized Brent")
+    st.subheader("Distribution of log(normalized VEA / normalized Brent)")
     st.caption(
-        "Frequency of valid daily ratios across 20 equal-width buckets; the red dashed line "
+        "Frequency of log(positive daily ratios) across 20 equal-width buckets; "
+        "zero ratios are excluded. The red dashed line "
         "marks the median, orange lines mark the 15.865th and 84.135th percentiles, "
         "and green lines mark the 35th and 65th percentiles."
     )

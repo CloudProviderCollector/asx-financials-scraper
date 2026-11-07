@@ -2,6 +2,7 @@
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from math import log
 from unittest.mock import MagicMock, patch
 
 from dashboards.vea_crude_adjusted_dashboard import (
@@ -313,23 +314,25 @@ def test_ratio_histogram_uses_twenty_buckets_and_all_valid_ratios() -> None:
     ratios = list(vea_per_crude_chart(shares, oil).data[1].y)
     figure = ratio_histogram(_normalized_ratios(shares, oil))
     histogram = figure.data[0]
-    assert list(histogram.x) == ratios == [1.0, 4 / 3, 1.0]
-    assert histogram.xbins.start < min(ratios)
-    assert histogram.xbins.end > max(ratios)
+    assert ratios == [1.0, 4 / 3, 1.0]
+    log_ratios = [log(value) for value in ratios]
+    assert list(histogram.x) == log_ratios
+    assert histogram.xbins.start < min(log_ratios)
+    assert histogram.xbins.end > max(log_ratios)
     assert (histogram.xbins.end - histogram.xbins.start) / histogram.xbins.size == 20
     assert len(figure.layout.shapes) == 5
     high_orange = float(Decimal(1) + (Decimal(4) / 3 - 1) * Decimal("0.68270"))
     high_green = float(Decimal(1) + (Decimal(4) / 3 - 1) * Decimal("0.3"))
     for shape, expected, color in zip(
         figure.layout.shapes,
-        [1.0, 1.0, high_orange, 1.0, high_green],
+        [0.0, 0.0, log(high_orange), 0.0, log(high_green)],
         ["red", "orange", "orange", "green", "green"],
         strict=True,
     ):
         assert shape.x0 == shape.x1 == expected
         assert shape.line.color == color
         assert shape.line.dash == "dash"
-    assert figure.layout.xaxis.title.text == "Normalized VEA / normalized Brent (unitless)"
+    assert figure.layout.xaxis.title.text == "log(normalized VEA / normalized Brent) (unitless)"
     assert figure.layout.yaxis.title.text == "Number of trading dates"
 
 
@@ -338,11 +341,11 @@ def test_ratio_histogram_handles_empty_and_constant_ratios() -> None:
     assert list(empty.data[0].x) == []
     assert len(empty.layout.shapes) == 0
     figure = ratio_histogram([(date(2026, 1, 3), Decimal("1"))])
-    assert list(figure.data[0].x) == [1.0]
-    assert figure.data[0].xbins.start == 0.5
-    assert figure.data[0].xbins.end == 1.5
+    assert list(figure.data[0].x) == [0.0]
+    assert figure.data[0].xbins.start == -0.5
+    assert figure.data[0].xbins.end == 0.5
     assert figure.data[0].xbins.size == 0.05
-    assert [shape.x0 for shape in figure.layout.shapes] == [1.0] * 5
+    assert [shape.x0 for shape in figure.layout.shapes] == [0.0] * 5
     assert [shape.line.color for shape in figure.layout.shapes] == [
         "red",
         "orange",
@@ -350,6 +353,21 @@ def test_ratio_histogram_handles_empty_and_constant_ratios() -> None:
         "green",
         "green",
     ]
+
+
+def test_ratio_histogram_excludes_zero_and_logs_positive_ratios() -> None:
+    ratios = [
+        (date(2026, 1, 2), Decimal("0")),
+        (date(2026, 1, 3), Decimal("0.5")),
+        (date(2026, 1, 4), Decimal("2")),
+    ]
+    figure = ratio_histogram(ratios)
+    assert list(figure.data[0].x) == [log(0.5), log(2)]
+    assert figure.layout.shapes[0].x0 == log(1.25)
+    assert len(figure.layout.shapes) == 5
+    zero_only = ratio_histogram([(date(2026, 1, 2), Decimal("0"))])
+    assert list(zero_only.data[0].x) == []
+    assert len(zero_only.layout.shapes) == 0
 
 
 def test_load_prices_keeps_open_only_rows_for_execution() -> None:
