@@ -150,12 +150,14 @@ def score_closes(pairs: list[tuple[date, float, float]], model: SpreadModel) -> 
     return points
 
 
-def find_opportunities(points: list[SpreadPoint]) -> tuple[list[Opportunity], str | None]:
+def find_opportunities(
+    points: list[SpreadPoint], start: date = SIGNAL_START
+) -> tuple[list[Opportunity], str | None]:
     """One signal-only position at a time; no fills or same-day reversals."""
     events: list[Opportunity] = []
     position: str | None = None
     for point in sorted(points, key=lambda p: p.day):
-        if point.day < SIGNAL_START or not isfinite(point.z_score):
+        if point.day < start or not isfinite(point.z_score):
             continue
         score = point.z_score
         if position is None and score < -1.5:
@@ -185,16 +187,17 @@ def fund_utilization(
     trades: list[HypotheticalTrade],
     events: list[Opportunity],
     points: list[SpreadPoint],
+    start: date = SIGNAL_START,
 ) -> float:
     """Calendar days held, including an unclosed signal through the last matched close."""
-    post_training = [point.day for point in points if point.day >= SIGNAL_START]
+    post_training = [point.day for point in points if point.day >= start]
     if not post_training:
         return 0.0
     end = max(post_training)
     used_days = sum(trade.holding_days for trade in trades)
     if events and events[-1].action == "Entry":
         used_days += (end - events[-1].day).days + 1
-    return used_days / ((end - SIGNAL_START).days + 1) * 100
+    return used_days / ((end - start).days + 1) * 100
 
 
 def closing_prices_chart(points: list[SpreadPoint]) -> go.Figure:
