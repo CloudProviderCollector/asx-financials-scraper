@@ -1,5 +1,6 @@
 """Compare VEA closes with Brent-based linear regression estimates."""
 
+from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -108,6 +109,43 @@ def fit_regression(
     if not (isfinite(result.slope) and isfinite(result.intercept)):
         return None
     return RegressionModel(result.slope, result.intercept, len(training))
+
+
+def price_chart(pairs: list[tuple[date, float, float]]) -> go.Figure:
+    figure = make_subplots(specs=[[{"secondary_y": True}]])
+    days = [day for day, _, _ in pairs]
+    figure.add_trace(
+        go.Scatter(x=days, y=[vea for _, vea, _ in pairs], name="VEA close", mode="lines"),
+        secondary_y=False,
+    )
+    figure.add_trace(
+        go.Scatter(x=days, y=[brent for _, _, brent in pairs], name="Brent close", mode="lines"),
+        secondary_y=True,
+    )
+    latest = max(days)
+    year_start = latest.replace(
+        year=latest.year - 1,
+        day=min(latest.day, monthrange(latest.year - 1, latest.month)[1]),
+    )
+    figure.update_xaxes(
+        title_text="Matched closing date",
+        range=[year_start, latest],
+        rangeselector={
+            "buttons": [
+                {"count": 1, "label": "1d", "step": "day", "stepmode": "backward"},
+                {"count": 5, "label": "5d", "step": "day", "stepmode": "backward"},
+                {"count": 1, "label": "1m", "step": "month", "stepmode": "backward"},
+                {"count": 3, "label": "3m", "step": "month", "stepmode": "backward"},
+                {"count": 1, "label": "1y", "step": "year", "stepmode": "backward"},
+                {"count": 5, "label": "5y", "step": "year", "stepmode": "backward"},
+                {"label": "max", "step": "all"},
+            ],
+        },
+    )
+    figure.update_yaxes(title_text="VEA close (AUD/share)", secondary_y=False)
+    figure.update_yaxes(title_text="Brent close (USD/barrel)", secondary_y=True)
+    figure.update_layout(hovermode="x unified", height=550)
+    return figure
 
 
 def regression_chart(pairs: list[tuple[date, float, float]], model: RegressionModel) -> go.Figure:
@@ -291,6 +329,16 @@ def main() -> None:
             "Missing matched VEA and BZ=F closes. Ingest VEA and download commodities first."
         )
         return
+
+    latest_vea = max(day for day, close in shares if close.is_finite() and close > 0)
+    latest_brent = max(day for day, price in oil if price.is_finite() and price > 0)
+    st.markdown(f":red[**Latest VEA close: {latest_vea} | Latest Brent close: {latest_brent}**]")
+
+    st.subheader("VEA and Brent closing prices")
+    st.caption(
+        "Positive, finite VEA and Brent closes on matching dates across all available history."
+    )
+    st.plotly_chart(price_chart(pairs), width="stretch")
 
     for title, start, end in [
         ("Fit: July 2018-June 2023", TRAIN_START, TRAIN_END),

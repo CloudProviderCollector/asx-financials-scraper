@@ -12,6 +12,7 @@ from dashboards.vea_brent_regression_dashboard import (
     fit_regression,
     load_prices,
     main,
+    price_chart,
     regression_chart,
     residual_histogram,
     score_residuals,
@@ -78,6 +79,41 @@ def test_period_and_all_history_use_distinct_ols_fits_with_intercepts() -> None:
     assert list(chart.data[0].y) == [100, 3, 5, 9]
     assert list(chart.data[1].y) == pytest.approx([2, 3, 5, 7])
     assert chart.data[0].yaxis == chart.data[1].yaxis
+
+
+@pytest.mark.parametrize(
+    ("latest", "year_start"),
+    [
+        (date(2024, 3, 31), date(2023, 3, 31)),
+        (date(2024, 2, 29), date(2023, 2, 28)),
+    ],
+)
+def test_price_chart_shows_matched_vea_and_brent_on_separate_axes(
+    latest: date, year_start: date
+) -> None:
+    pairs = [(date(2023, 2, 1), 3.0, 10.0), (latest, 5.0, 20.0)]
+    chart = price_chart(pairs)
+    assert [trace.name for trace in chart.data] == ["VEA close", "Brent close"]
+    assert [list(trace.x) for trace in chart.data] == [[day for day, _, _ in pairs]] * 2
+    assert list(chart.data[0].y) == [3.0, 5.0]
+    assert list(chart.data[1].y) == [10.0, 20.0]
+    assert (chart.data[0].yaxis, chart.data[1].yaxis) == ("y", "y2")
+    assert chart.layout.yaxis.title.text == "VEA close (AUD/share)"
+    assert chart.layout.yaxis2.title.text == "Brent close (USD/barrel)"
+    assert chart.layout.yaxis2.side == "right"
+    assert list(chart.layout.xaxis.range) == [year_start, latest]
+    selector = chart.layout.xaxis.rangeselector
+    assert [
+        (button.label, button.count, button.step, button.stepmode) for button in selector.buttons
+    ] == [
+        ("1d", 1, "day", "backward"),
+        ("5d", 5, "day", "backward"),
+        ("1m", 1, "month", "backward"),
+        ("3m", 3, "month", "backward"),
+        ("1y", 1, "year", "backward"),
+        ("5y", 5, "year", "backward"),
+        ("max", None, "all", None),
+    ]
 
 
 def test_regression_rejects_insufficient_or_constant_brent() -> None:
@@ -217,7 +253,7 @@ def test_main_shows_separate_trades_for_both_fits() -> None:
         patch("dashboards.vea_brent_regression_dashboard.st") as st,
     ):
         main()
-    assert st.plotly_chart.call_count == 6
+    assert st.plotly_chart.call_count == 7
     assert st.dataframe.call_count == 2
     trade_rows = st.dataframe.call_args_list[0].args[0]
     assert len(trade_rows) == 2
@@ -240,15 +276,38 @@ def test_main_shows_separate_trades_for_both_fits() -> None:
     assert all_data_rows != trade_rows
     assert all_data_rows[0]["Buy signal date"] == date(2023, 7, 3)
     assert all_data_rows[0]["Sell signal date"] == date(2023, 7, 4)
-    assert st.subheader.call_args_list[3].args[0] == "Fit: all available data"
+    assert st.subheader.call_args_list[4].args[0] == "Fit: all available data"
     st.subheader.assert_any_call(
         "July 2018-June 2023 fit: signals across all available matched dates"
     )
     st.subheader.assert_any_call("All-data fit: signals across all available matched dates")
     figures = [call.args[0] for call in st.plotly_chart.call_args_list]
-    assert len(figures[2].layout.shapes) == 5
-    assert len(figures[5].layout.shapes) == 2
-    assert list(figures[2].data[1].y) != list(figures[5].data[1].y)
+    assert len(figures[3].layout.shapes) == 5
+    assert len(figures[6].layout.shapes) == 2
+    assert list(figures[3].data[1].y) != list(figures[6].data[1].y)
+
+
+def test_main_shows_latest_valid_dates_for_each_source_independently() -> None:
+    shares = [
+        (date(2023, 1, 2), Decimal("3")),
+        (date(2023, 1, 3), Decimal("4")),
+        (date(2023, 1, 5), Decimal("5")),
+        (date(2023, 1, 6), Decimal("NaN")),
+    ]
+    oil = [
+        (date(2023, 1, 2), Decimal("10")),
+        (date(2023, 1, 3), Decimal("20")),
+        (date(2023, 1, 4), Decimal("30")),
+    ]
+    with (
+        patch("dashboards.vea_brent_regression_dashboard._engine"),
+        patch("dashboards.vea_brent_regression_dashboard.load_prices", return_value=(shares, oil)),
+        patch("dashboards.vea_brent_regression_dashboard.st") as st,
+    ):
+        main()
+    st.markdown.assert_called_once_with(
+        ":red[**Latest VEA close: 2023-01-05 | Latest Brent close: 2023-01-04**]"
+    )
 
 
 def test_main_displays_two_comparisons_with_separate_fits() -> None:
@@ -270,12 +329,15 @@ def test_main_displays_two_comparisons_with_separate_fits() -> None:
         patch("dashboards.vea_brent_regression_dashboard.st") as st,
     ):
         main()
-    assert st.subheader.call_count == 4
-    assert st.plotly_chart.call_count == 5
+    assert st.subheader.call_count == 5
+    assert st.subheader.call_args_list[0].args[0] == "VEA and Brent closing prices"
+    assert st.plotly_chart.call_count == 6
     st.warning.assert_any_call("Trading signals require a nonconstant training residual.")
     figures = [call.args[0] for call in st.plotly_chart.call_args_list]
-    assert list(figures[0].data[1].y) == pytest.approx([3, 5, 7, 9])
-    assert list(figures[1].data[0].x) == pytest.approx([0, 0])
-    assert list(figures[2].data[1].y) != list(figures[0].data[1].y)
-    assert len(figures[4].data) == 4
+    assert list(figures[0].data[0].y) == pytest.approx([3, 5, 9, 7])
+    assert list(figures[0].data[1].y) == pytest.approx([10, 20, 30, 40])
+    assert list(figures[1].data[1].y) == pytest.approx([3, 5, 7, 9])
+    assert list(figures[2].data[0].x) == pytest.approx([0, 0])
+    assert list(figures[3].data[1].y) != list(figures[1].data[1].y)
+    assert len(figures[5].data) == 4
     assert st.dataframe.call_count <= 1
