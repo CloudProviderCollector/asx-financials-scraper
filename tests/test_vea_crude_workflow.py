@@ -59,7 +59,7 @@ def test_hatchet_registers_one_market_scheduler_and_independent_jobs(
     assert registered == workflows
     assert [item.name for item in registered] == [
         "vea-crude-evaluate",
-        "asx-300-capture",
+        "asx-200-profile-capture",
         "market-catch-up",
     ]
     assert registered[0].idempotency.key_expression == "input.date"
@@ -82,24 +82,24 @@ def test_catch_up_dispatches_each_missing_run_and_reports_failure(
 
     client = Mock()
     monkeypatch.setattr(catch_up, "dispatch", fail)
-    monkeypatch.setattr(catch_up, "dispatch_asx_300", lambda now: calls.append("ASX 300"))
+    monkeypatch.setattr(catch_up, "dispatch_asx_200", lambda now: calls.append("ASX 200"))
     monkeypatch.setattr(catch_up, "_has_success_or_active_run", lambda *args: False)
     with pytest.raises(ExceptionGroup, match="Market catch-up dispatch failed"):
         catch_up.run_catch_up(client, datetime(2026, 11, 12, 20, 10, tzinfo=workflow.SYDNEY))
-    assert calls == ["VEA", "ASX 300"]
+    assert calls == ["VEA", "ASX 200"]
 
 
-def test_asx_300_dispatch_uses_date_key_and_skips_before_close(
+def test_asx_200_dispatch_uses_date_key_and_skips_before_close(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(catch_up, "asx_300_job", Mock())
+    monkeypatch.setattr(catch_up, "asx_200_job", Mock())
     before = datetime(2026, 11, 12, 16, tzinfo=workflow.SYDNEY)
-    catch_up.dispatch_asx_300(before)
-    catch_up.asx_300_job.run.assert_not_called()
+    catch_up.dispatch_asx_200(before)
+    catch_up.asx_200_job.run.assert_not_called()
     after = datetime(2026, 11, 12, 17, tzinfo=workflow.SYDNEY)
-    catch_up.dispatch_asx_300(after)
-    assert catch_up.asx_300_job.run.call_args.kwargs == {
-        "input": catch_up.Asx300Input(date="2026-11-12"),
+    catch_up.dispatch_asx_200(after)
+    assert catch_up.asx_200_job.run.call_args.kwargs == {
+        "input": catch_up.Asx200Input(date="2026-11-12"),
         "wait_for_result": False,
     }
 
@@ -137,7 +137,7 @@ def test_scheduler_runs_catch_up_every_hour(monkeypatch: pytest.MonkeyPatch) -> 
         ),
         (
             datetime(2026, 7, 6, 17, 10, tzinfo=workflow.SYDNEY),
-            ["vea-crude-evaluate", "asx-300-capture"],
+            ["vea-crude-evaluate", "asx-200-profile-capture"],
         ),
         (
             datetime(2026, 11, 12, 17, tzinfo=workflow.SYDNEY),
@@ -149,15 +149,15 @@ def test_scheduler_runs_catch_up_every_hour(monkeypatch: pytest.MonkeyPatch) -> 
         ),
         (
             datetime(2026, 11, 12, 18, 10, tzinfo=workflow.SYDNEY),
-            ["vea-crude-evaluate", "asx-300-capture"],
+            ["vea-crude-evaluate", "asx-200-profile-capture"],
         ),
         (
             datetime(2026, 11, 12, 20, tzinfo=workflow.SYDNEY),
-            ["vea-crude-evaluate", "asx-300-capture"],
+            ["vea-crude-evaluate", "asx-200-profile-capture"],
         ),
         (
             datetime(2026, 11, 12, 20, 10, tzinfo=workflow.SYDNEY),
-            ["vea-crude-evaluate", "asx-300-capture"],
+            ["vea-crude-evaluate", "asx-200-profile-capture"],
         ),
     ],
 )
@@ -208,10 +208,12 @@ def test_run_audit_checks_status_and_exact_target(
 ) -> None:
     client = Mock()
     created = datetime(2026, 11, 12, 7, tzinfo=UTC)
-    client.runs.list.return_value.rows = [_run("asx-300-capture", status, created, output=output)]
+    client.runs.list.return_value.rows = [
+        _run("asx-200-profile-capture", status, created, output=output)
+    ]
     assert (
         catch_up._has_success_or_active_run(
-            client, "asx-300-capture", date(2026, 11, 12), created, created.replace(hour=8)
+            client, "asx-200-profile-capture", date(2026, 11, 12), created, created.replace(hour=8)
         )
         is expected
     )
@@ -221,14 +223,23 @@ def test_run_audit_ignores_old_or_other_workflow_and_paginates() -> None:
     client = Mock()
     due = datetime(2026, 11, 12, 7, tzinfo=UTC)
     other = _run("vea-crude-evaluate", V1TaskStatus.COMPLETED, due)
-    old = _run("asx-300-capture", V1TaskStatus.COMPLETED, datetime(2026, 11, 11, 7, tzinfo=UTC))
-    wanted = _run("asx-300-capture", V1TaskStatus.COMPLETED, due, payload={"date": "2026-11-12"})
+    old = _run(
+        "asx-200-profile-capture",
+        V1TaskStatus.COMPLETED,
+        datetime(2026, 11, 11, 7, tzinfo=UTC),
+    )
+    wanted = _run(
+        "asx-200-profile-capture",
+        V1TaskStatus.COMPLETED,
+        due,
+        payload={"date": "2026-11-12"},
+    )
     client.runs.list.side_effect = [
         SimpleNamespace(rows=[other, old] * 50),
         SimpleNamespace(rows=[wanted]),
     ]
     assert catch_up._has_success_or_active_run(
-        client, "asx-300-capture", date(2026, 11, 12), due, due.replace(hour=8)
+        client, "asx-200-profile-capture", date(2026, 11, 12), due, due.replace(hour=8)
     )
     assert client.runs.list.call_args.kwargs["offset"] == 100
 
@@ -236,10 +247,12 @@ def test_run_audit_ignores_old_or_other_workflow_and_paginates() -> None:
 def test_run_audit_rejects_successful_unidentified_cron_run() -> None:
     client = Mock()
     due = datetime(2026, 11, 12, 7, tzinfo=UTC)
-    client.runs.list.return_value.rows = [_run("asx-300-capture", V1TaskStatus.COMPLETED, due)]
+    client.runs.list.return_value.rows = [
+        _run("asx-200-profile-capture", V1TaskStatus.COMPLETED, due)
+    ]
     with pytest.raises(ValueError, match="no target"):
         catch_up._has_success_or_active_run(
-            client, "asx-300-capture", date(2026, 11, 12), due, due.replace(hour=8)
+            client, "asx-200-profile-capture", date(2026, 11, 12), due, due.replace(hour=8)
         )
 
 
@@ -247,10 +260,10 @@ def test_run_audit_retries_failed_run_even_with_matching_input() -> None:
     client = Mock()
     due = datetime(2026, 11, 12, 7, tzinfo=UTC)
     client.runs.list.return_value.rows = [
-        _run("asx-300-capture", V1TaskStatus.FAILED, due, payload={"date": "2026-11-12"})
+        _run("asx-200-profile-capture", V1TaskStatus.FAILED, due, payload={"date": "2026-11-12"})
     ]
     assert not catch_up._has_success_or_active_run(
-        client, "asx-300-capture", date(2026, 11, 12), due, due.replace(hour=8)
+        client, "asx-200-profile-capture", date(2026, 11, 12), due, due.replace(hour=8)
     )
 
 

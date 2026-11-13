@@ -1,4 +1,4 @@
-"""ASX 300 profile-only captures and request pacing."""
+"""ASX 200 profile-only captures and request pacing."""
 
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
@@ -6,18 +6,26 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 from curl_cffi import requests
-from workflows import asx_300_workflow as workflow
+from workflows import asx_200_profiles_workflow as workflow
 
 
 def test_roster_is_resolved_from_repository_root() -> None:
     assert workflow.ROSTER.is_file()
-    assert len(workflow.load_tickers(workflow.ROSTER)) == 300
+    tickers = workflow.load_tickers(workflow.ROSTER)
+    assert len(tickers) == 200
+    assert {"ASK", "IFL", "NSR", "XYX"} <= set(tickers)
 
 
 class AfterClose(datetime):
     @classmethod
     def now(cls, tz: object = None) -> datetime:
         return datetime(2026, 11, 12, 17, 5, tzinfo=workflow.SYDNEY).astimezone(UTC)
+
+
+def test_capture_rejects_asx_300_roster(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(workflow, "load_tickers", lambda path: [f"T{i:03}" for i in range(300)])
+    with pytest.raises(ValueError, match="ASX 200 roster must contain exactly 200 tickers"):
+        workflow.capture(Mock(), datetime(2026, 11, 12, 17, tzinfo=workflow.SYDNEY))
 
 
 @pytest.mark.parametrize(
@@ -83,12 +91,12 @@ def test_resume_skips_stored_profiles_and_fetches_only_missing(
         raw_payloads=[Mock()],
     )
     monkeypatch.setattr(
-        workflow, "load_tickers", lambda path: ["BHP", "CBA"] + [f"T{i:03}" for i in range(298)]
+        workflow, "load_tickers", lambda path: ["BHP", "CBA"] + [f"T{i:03}" for i in range(198)]
     )
     monkeypatch.setattr(
         workflow,
         "completed_tickers",
-        lambda engine, day: {"BHP", *[f"T{i:03}" for i in range(298)]},
+        lambda engine, day: {"BHP", *[f"T{i:03}" for i in range(198)]},
     )
     monkeypatch.setattr(workflow, "PostgresFinancialDataStore", lambda engine: store)
     monkeypatch.setattr(workflow, "YFinanceProvider", lambda: provider)
@@ -110,7 +118,7 @@ def test_failed_profile_remains_retryable(monkeypatch: pytest.MonkeyPatch) -> No
     store = Mock()
     provider = Mock()
     provider.fetch_profile.return_value = SimpleNamespace(company_profile=None)
-    monkeypatch.setattr(workflow, "load_tickers", lambda path: ["CBA"] * 300)
+    monkeypatch.setattr(workflow, "load_tickers", lambda path: ["CBA"] * 200)
     monkeypatch.setattr(workflow, "completed_tickers", lambda engine, day: set())
     monkeypatch.setattr(workflow, "PostgresFinancialDataStore", lambda engine: store)
     monkeypatch.setattr(workflow, "YFinanceProvider", lambda: provider)
@@ -132,7 +140,7 @@ def test_profile_finishing_after_midnight_is_not_saved(monkeypatch: pytest.Monke
             fetched_at_utc=datetime(2026, 11, 13, 0, tzinfo=workflow.SYDNEY)
         )
     )
-    monkeypatch.setattr(workflow, "load_tickers", lambda path: ["CBA"] * 300)
+    monkeypatch.setattr(workflow, "load_tickers", lambda path: ["CBA"] * 200)
     monkeypatch.setattr(workflow, "completed_tickers", lambda engine, day: set())
     monkeypatch.setattr(workflow, "PostgresFinancialDataStore", lambda engine: store)
     monkeypatch.setattr(workflow, "YFinanceProvider", lambda: provider)
@@ -159,6 +167,6 @@ def test_registers_independent_idempotent_capture_job() -> None:
 
     client.workflow.side_effect = factory
     assert workflow.register_workflows(client) is workflows[0]
-    assert [item.name for item in workflows] == ["asx-300-capture"]
+    assert [item.name for item in workflows] == ["asx-200-profile-capture"]
     assert workflows[0].idempotency.key_expression == "input.date"
     assert workflows[0].task.call_args.kwargs["execution_timeout"].total_seconds() == 7 * 3600

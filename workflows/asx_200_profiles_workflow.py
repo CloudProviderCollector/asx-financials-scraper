@@ -1,4 +1,4 @@
-"""Capture point-in-time ASX 300 valuations after the Sydney market closes."""
+"""Capture point-in-time ASX 200 company profiles after the Sydney market closes."""
 
 import logging
 import time
@@ -27,7 +27,7 @@ from asx_financials.ingest_ticker_csv import load_tickers
 LOGGER = logging.getLogger(__name__)
 SYDNEY = ZoneInfo("Australia/Sydney")
 CALENDAR = xcals.get_calendar("XASX")
-ROSTER = Path(__file__).resolve().parents[1] / "data" / "asx300" / "asx300_20260410.csv"
+ROSTER = Path(__file__).resolve().parents[1] / "data" / "asx200" / "asx200_20260405.csv"
 LOCK_ID = 992637412
 INTERVAL_SECONDS = 10
 
@@ -83,14 +83,14 @@ def capture(engine: Engine, now: datetime | None = None) -> int:
     if day is None:
         return 0
     tickers = load_tickers(ROSTER)
-    if len(tickers) != 300:
-        raise ValueError("ASX 300 roster must contain exactly 300 tickers")
+    if len(tickers) != 200:
+        raise ValueError("ASX 200 roster must contain exactly 200 tickers")
 
     with engine.connect() as lock_connection:
         if not lock_connection.scalar(
             text("SELECT pg_try_advisory_lock(:lock_id)"), {"lock_id": LOCK_ID}
         ):
-            raise RuntimeError("ASX 300 capture is already running; retry later")
+            raise RuntimeError("ASX 200 profile capture is already running; retry later")
         try:
             completed = completed_tickers(engine, day)
             store = PostgresFinancialDataStore(engine)
@@ -101,7 +101,7 @@ def capture(engine: Engine, now: datetime | None = None) -> int:
                     if symbol in completed:
                         continue
                     if session_today(datetime.now(UTC)) != day:
-                        raise RuntimeError(f"ASX 300 capture for {day} ran past midnight")
+                        raise RuntimeError(f"ASX 200 profile capture for {day} ran past midnight")
                     ticker = AsxTicker.parse(symbol)
                     run_id = str(uuid4())
                     store.start_ingestion_run(
@@ -132,7 +132,7 @@ def capture(engine: Engine, now: datetime | None = None) -> int:
                         raise
                     captured += 1
             LOGGER.info(
-                "Captured %s ASX 300 profiles for %s (%s already stored)",
+                "Captured %s ASX 200 profiles for %s (%s already stored)",
                 captured,
                 day,
                 len(completed),
@@ -154,7 +154,7 @@ def check(now: datetime | None = None) -> int:
 
 def register_workflows(hatchet: Hatchet) -> Any:
     job = hatchet.workflow(
-        name="asx-300-capture",
+        name="asx-200-profile-capture",
         on_crons=["0 7 * * *"],
         cron_input=CaptureInput(),
         input_validator=CaptureInput,
@@ -169,7 +169,7 @@ def register_workflows(hatchet: Hatchet) -> Any:
         now = datetime.now(UTC)
         day = session_today(now)
         if input.date and (day is None or input.date != day.isoformat()):
-            raise RuntimeError(f"ASX 300 capture for {input.date} is no longer eligible")
+            raise RuntimeError(f"ASX 200 profile capture for {input.date} is no longer eligible")
         if day is not None:
             check(now)
         return {"target": day.isoformat() if day is not None else None}

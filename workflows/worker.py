@@ -9,7 +9,7 @@ from typing import Any
 from hatchet_sdk import Hatchet
 
 from workflows import catch_up
-from workflows.asx_300_workflow import register_workflows as register_asx_300
+from workflows.asx_200_profiles_workflow import register_workflows as register_asx_200
 from workflows.vea_crude_workflow import register_workflow as register_vea
 
 LOGGER = logging.getLogger(__name__)
@@ -18,9 +18,9 @@ LOGGER = logging.getLogger(__name__)
 def register_workflows() -> tuple[Hatchet, list[Any]]:
     hatchet = Hatchet()
     vea = register_vea(hatchet)
-    asx_300 = register_asx_300(hatchet)
-    scheduler = catch_up.register_workflow(hatchet, vea, asx_300)
-    return hatchet, [vea, asx_300, scheduler]
+    asx_200 = register_asx_200(hatchet)
+    scheduler = catch_up.register_workflow(hatchet, vea, asx_200)
+    return hatchet, [vea, asx_200, scheduler]
 
 
 def main() -> None:

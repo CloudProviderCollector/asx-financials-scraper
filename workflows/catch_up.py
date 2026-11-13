@@ -9,18 +9,18 @@ from hatchet_sdk import Hatchet
 from hatchet_sdk.clients.rest.models import V1TaskStatus
 from hatchet_sdk.exceptions import IdempotencyCollisionError
 
-from workflows.asx_300_workflow import SYDNEY, session_today
-from workflows.asx_300_workflow import CaptureInput as Asx300Input
+from workflows.asx_200_profiles_workflow import SYDNEY, session_today
+from workflows.asx_200_profiles_workflow import CaptureInput as Asx200Input
 from workflows.vea_crude_workflow import CheckInput, target_session, yesterday
 
 LOGGER = logging.getLogger(__name__)
 job: Any = None
-asx_300_job: Any = None
+asx_200_job: Any = None
 
 
-def register_workflow(hatchet: Hatchet, vea: Any, asx_300: Any) -> Any:
-    global job, asx_300_job
-    job, asx_300_job = vea, asx_300
+def register_workflow(hatchet: Hatchet, vea: Any, asx_200: Any) -> Any:
+    global job, asx_200_job
+    job, asx_200_job = vea, asx_200
     scheduler = hatchet.workflow(name="market-catch-up", on_crons=["10 * * * *"])
 
     @scheduler.task()
@@ -37,14 +37,14 @@ def dispatch(target: date) -> None:
         LOGGER.info("Evaluation for %s is already queued or running", target)
 
 
-def dispatch_asx_300(now: datetime) -> None:
+def dispatch_asx_200(now: datetime) -> None:
     day = session_today(now)
     if day is None:
         return
     try:
-        asx_300_job.run(input=Asx300Input(date=day.isoformat()), wait_for_result=False)
+        asx_200_job.run(input=Asx200Input(date=day.isoformat()), wait_for_result=False)
     except IdempotencyCollisionError:
-        LOGGER.info("ASX 300 capture for %s is already queued or running", day)
+        LOGGER.info("ASX 200 profile capture for %s is already queued or running", day)
 
 
 def _due(day: date, hour: int) -> datetime:
@@ -54,7 +54,7 @@ def _due(day: date, hour: int) -> datetime:
 def _run_target(run: Any, name: str) -> str | None:
     task = {
         "vea-crude-evaluate": "monitor",
-        "asx-300-capture": "capture_task",
+        "asx-200-profile-capture": "capture_task",
     }[name]
     output = run.output.get("target", run.output.get(task, {}))
     if isinstance(output, dict):
@@ -102,14 +102,14 @@ def _has_success_or_active_run(
 def run_catch_up(hatchet: Hatchet, now: datetime | None = None) -> None:
     now = now or datetime.now(UTC)
     vea_day = target_session(yesterday(now))
-    asx_300_day = session_today(now)
+    asx_200_day = session_today(now)
     jobs = (
         ("vea-crude-evaluate", vea_day, _due(vea_day, 23), lambda: dispatch(vea_day)),
         (
-            "asx-300-capture",
-            asx_300_day,
-            _due(asx_300_day, 7) if asx_300_day else None,
-            lambda: dispatch_asx_300(now),
+            "asx-200-profile-capture",
+            asx_200_day,
+            _due(asx_200_day, 7) if asx_200_day else None,
+            lambda: dispatch_asx_200(now),
         ),
     )
     errors: list[Exception] = []
