@@ -162,6 +162,28 @@ class YFinanceProvider:
         ),
     )
 
+    def fetch_profile(self, ticker: AsxTicker, session: Any = None) -> ProviderFetchResult:
+        """Fetch only the point-in-time company profile, not statements or price history."""
+        yahoo_ticker = yf.Ticker(ticker.yahoo_symbol, session=session)
+        info = self._safe_info(yahoo_ticker)
+        fetched_at_utc = _utcnow()
+        raw_payloads: list[RawSourcePayload] = []
+        failures: list[SegmentFailure] = []
+        profile = self._build_company_profile(
+            ticker=ticker,
+            fetched_at_utc=fetched_at_utc,
+            info=info,
+            raw_payloads=raw_payloads,
+            failures=failures,
+        )
+        return ProviderFetchResult(
+            source_name=self.SOURCE_NAME,
+            yahoo_symbol=ticker.yahoo_symbol,
+            company_profile=profile,
+            raw_payloads=raw_payloads,
+            segment_failures=failures,
+        )
+
     def fetch(
         self,
         ticker: AsxTicker,

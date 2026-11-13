@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
   "alembic>=1.15,<2.0",
+  "curl-cffi>=0.13,<1",
   "exchange-calendars>=4,<5",
   "fastapi>=0.115.12,<1.0.0",
   "hatchet-sdk>=1,<2",
@@ -39,12 +40,12 @@ dev = [
 asx-financials = "asx_financials.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/asx_financials", "dashboards"]
+packages = ["src/asx_financials", "dashboards", "workflows"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-src = ["src", "dashboards", "tests"]
+src = ["src", "dashboards", "workflows", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "N", "ASYNC", "RUF"]
@@ -63,7 +64,7 @@ disallow_untyped_defs = false
 ignore_missing_imports = true
 disable_error_code = ["attr-defined", "no-any-return"]
 warn_unused_configs = true
-packages = ["asx_financials", "dashboards"]
+packages = ["asx_financials", "dashboards", "workflows"]
 
 [tool.coverage.run]
-source = ["src/asx_financials", "dashboards"]
+source = ["src/asx_financials", "dashboards", "workflows"]

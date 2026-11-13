@@ -80,6 +80,31 @@ def test_provider_extracts_company_and_statement_snapshots(monkeypatch) -> None:
     )
 
 
+def test_profile_only_fetch_does_not_request_history_or_statements(monkeypatch) -> None:
+    from unittest.mock import Mock
+
+    yahoo_ticker = Mock()
+    yahoo_ticker.get_info.return_value = {
+        "currency": "AUD",
+        "marketCap": 500,
+        "trailingPE": 12,
+        "forwardPE": 10,
+    }
+    session = Mock()
+    factory = Mock(return_value=yahoo_ticker)
+    monkeypatch.setattr(yfinance_provider.yf, "Ticker", factory)
+
+    result = YFinanceProvider().fetch_profile(AsxTicker.parse("BHP"), session=session)
+
+    factory.assert_called_once_with("BHP.AX", session=session)
+    yahoo_ticker.get_info.assert_called_once()
+    yahoo_ticker.history.assert_not_called()
+    yahoo_ticker.get_income_stmt.assert_not_called()
+    assert result.company_profile is not None
+    assert result.company_profile.profile_payload["trailingPE"] == 12
+    assert result.raw_payloads[0].payload["forwardPE"] == 10
+
+
 def test_history_initial_fetch_requests_all_available_data(monkeypatch) -> None:
     ticker = StubTicker()
     monkeypatch.setattr(yfinance_provider.yf, "Ticker", lambda _: ticker)

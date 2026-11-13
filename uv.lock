@@ -223,6 +223,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
+    { name = "curl-cffi" },
     { name = "exchange-calendars" },
     { name = "fastapi" },
     { name = "hatchet-sdk" },
@@ -251,6 +252,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.15,<2.0" },
+    { name = "curl-cffi", specifier = ">=0.13,<1" },
     { name = "exchange-calendars", specifier = ">=4,<5" },
     { name = "fastapi", specifier = ">=0.115.12,<1.0.0" },
     { name = "hatchet-sdk", specifier = ">=1,<2" },

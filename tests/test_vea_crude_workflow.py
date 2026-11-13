@@ -6,10 +6,11 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from hatchet_sdk.clients.rest.models import V1TaskStatus
 from hatchet_sdk.exceptions import IdempotencyCollisionError
 from sqlalchemy import create_engine, text
-
-from asx_financials import vea_crude_workflow as workflow
+from workflows import catch_up, worker
+from workflows import vea_crude_workflow as workflow
 
 
 def test_calendar_counts_asx_sessions_not_calendar_days() -> None:
@@ -19,48 +20,24 @@ def test_calendar_counts_asx_sessions_not_calendar_days() -> None:
     assert workflow.missing_sessions(date(2026, 1, 9), date(2026, 1, 9)) == 0
 
 
-@pytest.mark.parametrize(
-    ("hour", "daily_only", "should_dispatch"),
-    [(8, False, False), (9, True, True), (10, True, False), (10, False, True)],
-)
-def test_dispatch_checks_sydney_clock_and_completion(
-    monkeypatch: pytest.MonkeyPatch, hour: int, daily_only: bool, should_dispatch: bool
-) -> None:
-    class Clock:
-        @staticmethod
-        def now(tz: object) -> datetime:
-            return datetime(2026, 1, 6, hour, tzinfo=workflow.SYDNEY).astimezone(UTC)
-
-    monkeypatch.setattr(workflow, "datetime", Clock)
-    monkeypatch.setattr(workflow, "create_engine", lambda *args, **kwargs: Mock())
-    monkeypatch.setattr(workflow, "_already_complete", lambda *args: False)
-    monkeypatch.setattr(workflow, "job", Mock())
-    workflow.dispatch(daily_only=daily_only)
-    assert workflow.job.run.call_count == int(should_dispatch)
-    if should_dispatch:
-        assert workflow.job.run.call_args.kwargs["input"].date == "2026-01-05"
+def test_dispatch_passes_target_to_workflow(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(catch_up, "job", Mock())
+    catch_up.dispatch(date(2026, 1, 5))
+    assert catch_up.job.run.call_args.kwargs["input"].date == "2026-01-05"
 
 
 def test_dispatch_ignores_duplicate_run_but_not_other_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class Clock:
-        @staticmethod
-        def now(tz: object) -> datetime:
-            return datetime(2026, 1, 6, 10, tzinfo=workflow.SYDNEY).astimezone(UTC)
-
-    monkeypatch.setattr(workflow, "datetime", Clock)
-    monkeypatch.setattr(workflow, "create_engine", lambda *args, **kwargs: Mock())
-    monkeypatch.setattr(workflow, "_already_complete", lambda *args: False)
-    monkeypatch.setattr(workflow, "job", Mock())
-    workflow.job.run.side_effect = IdempotencyCollisionError("existing-run")
-    workflow.dispatch()
-    workflow.job.run.side_effect = RuntimeError("network unavailable")
+    monkeypatch.setattr(catch_up, "job", Mock())
+    catch_up.job.run.side_effect = IdempotencyCollisionError("existing-run")
+    catch_up.dispatch(date(2026, 1, 5))
+    catch_up.job.run.side_effect = RuntimeError("network unavailable")
     with pytest.raises(RuntimeError, match="network unavailable"):
-        workflow.dispatch()
+        catch_up.dispatch(date(2026, 1, 5))
 
 
-def test_hatchet_registers_sydney_dst_crons_and_hourly_catch_up(
+def test_hatchet_registers_one_market_scheduler_and_independent_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflows: list[Mock] = []
@@ -71,23 +48,217 @@ def test_hatchet_registers_sydney_dst_crons_and_hourly_catch_up(
         item.name = kwargs["name"]
         item.crons = kwargs.get("on_crons")
         item.idempotency = kwargs.get("idempotency")
-        item.task.side_effect = lambda: lambda callback: callback
+        item.task.side_effect = lambda **kwargs: lambda callback: callback
         workflows.append(item)
         return item
 
     client.workflow.side_effect = workflow_factory
-    monkeypatch.setattr(workflow, "Hatchet", lambda: client)
-    registered_client, registered = workflow.register_workflows()
+    monkeypatch.setattr(worker, "Hatchet", lambda: client)
+    registered_client, registered = worker.register_workflows()
     assert registered_client is client
     assert registered == workflows
     assert [item.name for item in registered] == [
         "vea-crude-evaluate",
-        "vea-crude-daily",
-        "vea-crude-catch-up",
+        "asx-200-capture",
+        "asx-300-capture",
+        "market-catch-up",
     ]
     assert registered[0].idempotency.key_expression == "input.date"
-    assert registered[1].crons == ["0 22 * * *", "0 23 * * *"]
-    assert registered[2].crons == ["10 * * * *"]
+    assert registered[1].idempotency.key_expression == "input.hour"
+    assert registered[2].idempotency.key_expression == "input.date"
+    assert [item.crons for item in registered] == [
+        ["0 23 * * *"],
+        ["0 9 * * *"],
+        ["0 7 * * *"],
+        ["10 * * * *"],
+    ]
+
+
+def test_catch_up_dispatches_each_missing_run_and_reports_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    def fail(target: date) -> None:
+        calls.append("VEA")
+        raise RuntimeError("VEA unavailable")
+
+    client = Mock()
+    monkeypatch.setattr(catch_up, "dispatch", fail)
+    monkeypatch.setattr(catch_up, "dispatch_asx_200", lambda now: calls.append("ASX 200"))
+    monkeypatch.setattr(catch_up, "dispatch_asx_300", lambda now: calls.append("ASX 300"))
+    monkeypatch.setattr(catch_up, "_has_success_or_active_run", lambda *args: False)
+    with pytest.raises(ExceptionGroup, match="Market catch-up dispatch failed"):
+        catch_up.run_catch_up(client, datetime(2026, 11, 12, 20, 10, tzinfo=workflow.SYDNEY))
+    assert calls == ["VEA", "ASX 200", "ASX 300"]
+
+
+def test_market_jobs_use_date_and_hour_keys_and_skip_before_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(catch_up, "asx_200_job", Mock())
+    monkeypatch.setattr(catch_up, "asx_300_job", Mock())
+    before = datetime(2026, 11, 12, 16, tzinfo=workflow.SYDNEY)
+    catch_up.dispatch_asx_200(before)
+    catch_up.dispatch_asx_300(before)
+    assert catch_up.asx_200_job.run.call_args.kwargs["input"].hour == "2026-11-12T16"
+    catch_up.asx_300_job.run.assert_not_called()
+    after = datetime(2026, 11, 12, 17, tzinfo=workflow.SYDNEY)
+    catch_up.dispatch_asx_300(after)
+    assert catch_up.asx_300_job.run.call_args.kwargs == {
+        "input": catch_up.Asx300Input(date="2026-11-12"),
+        "wait_for_result": False,
+    }
+
+
+def test_scheduler_runs_catch_up_every_hour(monkeypatch: pytest.MonkeyPatch) -> None:
+    callbacks = {}
+    client = Mock()
+
+    def factory(**kwargs: object) -> Mock:
+        item = Mock()
+        item.task.side_effect = lambda **options: (
+            lambda callback: callbacks.setdefault(kwargs["name"], callback)
+        )
+        return item
+
+    client.workflow.side_effect = factory
+    catch_up_check = Mock()
+    monkeypatch.setattr(worker, "Hatchet", lambda: client)
+    monkeypatch.setattr(worker.catch_up, "run_catch_up", catch_up_check)
+    worker.register_workflows()
+    callbacks["market-catch-up"](None, None)
+    catch_up_check.assert_called_once_with(client)
+
+
+@pytest.mark.parametrize(
+    ("now", "expected"),
+    [
+        (
+            datetime(2026, 7, 6, 16, tzinfo=workflow.SYDNEY),
+            ["vea-crude-evaluate", "asx-200-capture"],
+        ),
+        (
+            datetime(2026, 7, 6, 17, tzinfo=workflow.SYDNEY),
+            ["vea-crude-evaluate", "asx-200-capture"],
+        ),
+        (
+            datetime(2026, 7, 6, 17, 10, tzinfo=workflow.SYDNEY),
+            ["vea-crude-evaluate", "asx-200-capture", "asx-300-capture"],
+        ),
+        (
+            datetime(2026, 11, 12, 17, tzinfo=workflow.SYDNEY),
+            ["vea-crude-evaluate", "asx-200-capture"],
+        ),
+        (
+            datetime(2026, 11, 12, 18, tzinfo=workflow.SYDNEY),
+            ["vea-crude-evaluate", "asx-200-capture"],
+        ),
+        (
+            datetime(2026, 11, 12, 18, 10, tzinfo=workflow.SYDNEY),
+            ["vea-crude-evaluate", "asx-200-capture", "asx-300-capture"],
+        ),
+        (
+            datetime(2026, 11, 12, 20, tzinfo=workflow.SYDNEY),
+            ["vea-crude-evaluate", "asx-300-capture"],
+        ),
+        (
+            datetime(2026, 11, 12, 20, 10, tzinfo=workflow.SYDNEY),
+            ["vea-crude-evaluate", "asx-200-capture", "asx-300-capture"],
+        ),
+    ],
+)
+def test_catch_up_waits_for_each_daily_utc_schedule(
+    monkeypatch: pytest.MonkeyPatch, now: datetime, expected: list[str]
+) -> None:
+    checked: list[str] = []
+    monkeypatch.setattr(
+        catch_up,
+        "_has_success_or_active_run",
+        lambda client, name, day, due, at: checked.append(name) or True,
+    )
+    catch_up.run_catch_up(Mock(), now.astimezone(UTC))
+    assert checked == expected
+
+
+def _run(
+    name: str,
+    status: V1TaskStatus,
+    created: datetime,
+    *,
+    payload: dict[str, str] | None = None,
+    output: dict[str, object] | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        workflow_name=name,
+        status=status,
+        created_at=created,
+        input={"input": payload or {}},
+        output=output or {},
+    )
+
+
+@pytest.mark.parametrize(
+    ("status", "output", "expected"),
+    [
+        (V1TaskStatus.COMPLETED, {"target": "2026-11-12"}, True),
+        (V1TaskStatus.COMPLETED, {"capture_task": {"target": "2026-11-12"}}, True),
+        (V1TaskStatus.COMPLETED, {"capture_task": {"target": "2026-11-11"}}, False),
+        (V1TaskStatus.RUNNING, {}, True),
+        (V1TaskStatus.QUEUED, {}, True),
+        (V1TaskStatus.FAILED, {}, False),
+        (V1TaskStatus.CANCELLED, {}, False),
+    ],
+)
+def test_run_audit_checks_status_and_exact_target(
+    status: V1TaskStatus, output: dict[str, object], expected: bool
+) -> None:
+    client = Mock()
+    created = datetime(2026, 11, 12, 7, tzinfo=UTC)
+    client.runs.list.return_value.rows = [_run("asx-300-capture", status, created, output=output)]
+    assert (
+        catch_up._has_success_or_active_run(
+            client, "asx-300-capture", date(2026, 11, 12), created, created.replace(hour=8)
+        )
+        is expected
+    )
+
+
+def test_run_audit_ignores_old_or_other_workflow_and_paginates() -> None:
+    client = Mock()
+    due = datetime(2026, 11, 12, 7, tzinfo=UTC)
+    other = _run("asx-200-capture", V1TaskStatus.COMPLETED, due)
+    old = _run("asx-300-capture", V1TaskStatus.COMPLETED, datetime(2026, 11, 11, 7, tzinfo=UTC))
+    wanted = _run("asx-300-capture", V1TaskStatus.COMPLETED, due, payload={"date": "2026-11-12"})
+    client.runs.list.side_effect = [
+        SimpleNamespace(rows=[other, old] * 50),
+        SimpleNamespace(rows=[wanted]),
+    ]
+    assert catch_up._has_success_or_active_run(
+        client, "asx-300-capture", date(2026, 11, 12), due, due.replace(hour=8)
+    )
+    assert client.runs.list.call_args.kwargs["offset"] == 100
+
+
+def test_run_audit_rejects_successful_unidentified_cron_run() -> None:
+    client = Mock()
+    due = datetime(2026, 11, 12, 7, tzinfo=UTC)
+    client.runs.list.return_value.rows = [_run("asx-300-capture", V1TaskStatus.COMPLETED, due)]
+    with pytest.raises(ValueError, match="no target"):
+        catch_up._has_success_or_active_run(
+            client, "asx-300-capture", date(2026, 11, 12), due, due.replace(hour=8)
+        )
+
+
+def test_run_audit_retries_failed_run_even_with_matching_input() -> None:
+    client = Mock()
+    due = datetime(2026, 11, 12, 7, tzinfo=UTC)
+    client.runs.list.return_value.rows = [
+        _run("asx-300-capture", V1TaskStatus.FAILED, due, payload={"date": "2026-11-12"})
+    ]
+    assert not catch_up._has_success_or_active_run(
+        client, "asx-300-capture", date(2026, 11, 12), due, due.replace(hour=8)
+    )
 
 
 def test_telegram_rejection_and_success(monkeypatch: pytest.MonkeyPatch) -> None:

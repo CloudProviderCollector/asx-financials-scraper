@@ -11,9 +11,20 @@ def test_daily_watch_links_to_regression_page() -> None:
 
     streamlit.set_page_config.assert_called_once_with(page_title="Daily Watch", layout="wide")
     streamlit.title.assert_called_once_with("Daily Watch")
-    streamlit.page_link.assert_called_once_with(
-        daily_watch_dashboard.regression_page, label="VEA, Brent linear regression"
+    assert streamlit.page_link.call_args_list[0].args == (
+        daily_watch_dashboard.regression_page,
     )
+    assert streamlit.page_link.call_args_list[0].kwargs == {
+        "label": "VEA, Brent linear regression"
+    }
+    assert streamlit.page_link.call_args_list[1].args == (
+        daily_watch_dashboard.asx_200_page,
+    )
+    assert streamlit.page_link.call_args_list[1].kwargs == {"label": "S&P/ASX 200"}
+    assert streamlit.page_link.call_args_list[2].args == (
+        daily_watch_dashboard.asx_300_page,
+    )
+    assert streamlit.page_link.call_args_list[2].kwargs == {"label": "ASX 300 valuations"}
 
 
 def test_navigation_registers_daily_watch_as_default() -> None:
@@ -24,6 +35,11 @@ def test_navigation_registers_daily_watch_as_default() -> None:
         daily_watch_dashboard.daily_watch, title="Daily Watch", default=True
     )
     streamlit.navigation.assert_called_once_with(
-        [streamlit.Page.return_value, daily_watch_dashboard.regression_page]
+        [
+            streamlit.Page.return_value,
+            daily_watch_dashboard.regression_page,
+            daily_watch_dashboard.asx_200_page,
+            daily_watch_dashboard.asx_300_page,
+        ]
     )
     streamlit.navigation.return_value.run.assert_called_once_with()

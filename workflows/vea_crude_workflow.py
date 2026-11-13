@@ -2,8 +2,6 @@
 
 import logging
 import os
-import threading
-import time
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -12,7 +10,6 @@ import exchange_calendars as xcals
 import requests
 from dashboards.vea_crude_dashboard import latest_strategy_signals, load_prices
 from hatchet_sdk import Hatchet
-from hatchet_sdk.exceptions import IdempotencyCollisionError
 from hatchet_sdk.types.idempotency import StatusBasedIdempotencyConfig
 from pydantic import BaseModel
 from sqlalchemy import Engine, create_engine, text
@@ -166,14 +163,11 @@ class CheckInput(BaseModel):
     date: str = ""
 
 
-job: Any = None
-
-
-def register_workflows() -> tuple[Hatchet, list[Any]]:
-    global job
-    hatchet = Hatchet()
+def register_workflow(hatchet: Hatchet) -> Any:
     job = hatchet.workflow(
         name="vea-crude-evaluate",
+        on_crons=["0 23 * * *"],
+        cron_input=CheckInput(),
         input_validator=CheckInput,
         idempotency=StatusBasedIdempotencyConfig(
             key_expression="input.date", fallback_ttl=timedelta(days=7)
@@ -182,67 +176,13 @@ def register_workflows() -> tuple[Hatchet, list[Any]]:
     )
 
     @job.task()
-    def monitor(input: CheckInput, ctx: Any) -> None:
-        day = date.fromisoformat(input.date)
+    def monitor(input: CheckInput, ctx: Any) -> dict[str, str]:
+        day = date.fromisoformat(input.date) if input.date else target_session(yesterday())
         engine = create_engine(get_settings().database_url, pool_pre_ping=True)
         try:
             evaluate(engine, day)
         finally:
             engine.dispose()
+        return {"target": day.isoformat()}
 
-    # Hatchet cron is UTC. Both UTC hours cover Sydney's 09:00 across DST.
-    daily = hatchet.workflow(name="vea-crude-daily", on_crons=["0 22 * * *", "0 23 * * *"])
-    hourly = hatchet.workflow(name="vea-crude-catch-up", on_crons=["10 * * * *"])
-
-    @daily.task()
-    def daily_check(input: Any, ctx: Any) -> None:
-        dispatch(daily_only=True)
-
-    @hourly.task()
-    def catch_up_check(input: Any, ctx: Any) -> None:
-        dispatch()
-
-    return hatchet, [job, daily, hourly]
-
-
-def dispatch(*, daily_only: bool = False) -> None:
-    now = datetime.now(UTC).astimezone(SYDNEY)
-    if daily_only and now.hour != 9:
-        return
-    if now.hour < 9:
-        return
-    target = target_session(yesterday(now))
-    engine = create_engine(get_settings().database_url, pool_pre_ping=True)
-    try:
-        if _already_complete(engine, target):
-            return
-    finally:
-        engine.dispose()
-    # The worker may start before its registration becomes visible; retry at next hourly check.
-    try:
-        job.run(input=CheckInput(date=target.isoformat()), wait_for_result=False)
-    except IdempotencyCollisionError:
-        LOGGER.info("Evaluation for %s is already queued or running", target)
-
-
-def main() -> None:
-    logging.basicConfig(level=logging.INFO)
-    if not os.getenv("TELEGRAM_BOT_TOKEN") or not os.getenv("TELEGRAM_CHAT_ID"):
-        raise RuntimeError("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID before starting worker")
-    hatchet, workflows = register_workflows()
-
-    def startup_check() -> None:
-        time.sleep(10)
-        while True:
-            try:
-                dispatch()
-            except Exception:
-                LOGGER.exception("Catch-up check failed; retrying hourly")
-            time.sleep(3600)
-
-    threading.Thread(target=startup_check, daemon=True, name="vea-crude-catch-up").start()
-    hatchet.worker("vea-crude-worker", workflows=workflows, slots=2).start()
-
-
-if __name__ == "__main__":
-    main()
+    return job
