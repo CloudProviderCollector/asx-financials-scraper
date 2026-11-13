@@ -59,16 +59,13 @@ def test_hatchet_registers_one_market_scheduler_and_independent_jobs(
     assert registered == workflows
     assert [item.name for item in registered] == [
         "vea-crude-evaluate",
-        "asx-200-capture",
         "asx-300-capture",
         "market-catch-up",
     ]
     assert registered[0].idempotency.key_expression == "input.date"
-    assert registered[1].idempotency.key_expression == "input.hour"
-    assert registered[2].idempotency.key_expression == "input.date"
+    assert registered[1].idempotency.key_expression == "input.date"
     assert [item.crons for item in registered] == [
         ["0 23 * * *"],
-        ["0 9 * * *"],
         ["0 7 * * *"],
         ["10 * * * *"],
     ]
@@ -85,23 +82,19 @@ def test_catch_up_dispatches_each_missing_run_and_reports_failure(
 
     client = Mock()
     monkeypatch.setattr(catch_up, "dispatch", fail)
-    monkeypatch.setattr(catch_up, "dispatch_asx_200", lambda now: calls.append("ASX 200"))
     monkeypatch.setattr(catch_up, "dispatch_asx_300", lambda now: calls.append("ASX 300"))
     monkeypatch.setattr(catch_up, "_has_success_or_active_run", lambda *args: False)
     with pytest.raises(ExceptionGroup, match="Market catch-up dispatch failed"):
         catch_up.run_catch_up(client, datetime(2026, 11, 12, 20, 10, tzinfo=workflow.SYDNEY))
-    assert calls == ["VEA", "ASX 200", "ASX 300"]
+    assert calls == ["VEA", "ASX 300"]
 
 
-def test_market_jobs_use_date_and_hour_keys_and_skip_before_close(
+def test_asx_300_dispatch_uses_date_key_and_skips_before_close(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(catch_up, "asx_200_job", Mock())
     monkeypatch.setattr(catch_up, "asx_300_job", Mock())
     before = datetime(2026, 11, 12, 16, tzinfo=workflow.SYDNEY)
-    catch_up.dispatch_asx_200(before)
     catch_up.dispatch_asx_300(before)
-    assert catch_up.asx_200_job.run.call_args.kwargs["input"].hour == "2026-11-12T16"
     catch_up.asx_300_job.run.assert_not_called()
     after = datetime(2026, 11, 12, 17, tzinfo=workflow.SYDNEY)
     catch_up.dispatch_asx_300(after)
@@ -136,27 +129,27 @@ def test_scheduler_runs_catch_up_every_hour(monkeypatch: pytest.MonkeyPatch) -> 
     [
         (
             datetime(2026, 7, 6, 16, tzinfo=workflow.SYDNEY),
-            ["vea-crude-evaluate", "asx-200-capture"],
+            ["vea-crude-evaluate"],
         ),
         (
             datetime(2026, 7, 6, 17, tzinfo=workflow.SYDNEY),
-            ["vea-crude-evaluate", "asx-200-capture"],
+            ["vea-crude-evaluate"],
         ),
         (
             datetime(2026, 7, 6, 17, 10, tzinfo=workflow.SYDNEY),
-            ["vea-crude-evaluate", "asx-200-capture", "asx-300-capture"],
+            ["vea-crude-evaluate", "asx-300-capture"],
         ),
         (
             datetime(2026, 11, 12, 17, tzinfo=workflow.SYDNEY),
-            ["vea-crude-evaluate", "asx-200-capture"],
+            ["vea-crude-evaluate"],
         ),
         (
             datetime(2026, 11, 12, 18, tzinfo=workflow.SYDNEY),
-            ["vea-crude-evaluate", "asx-200-capture"],
+            ["vea-crude-evaluate"],
         ),
         (
             datetime(2026, 11, 12, 18, 10, tzinfo=workflow.SYDNEY),
-            ["vea-crude-evaluate", "asx-200-capture", "asx-300-capture"],
+            ["vea-crude-evaluate", "asx-300-capture"],
         ),
         (
             datetime(2026, 11, 12, 20, tzinfo=workflow.SYDNEY),
@@ -164,7 +157,7 @@ def test_scheduler_runs_catch_up_every_hour(monkeypatch: pytest.MonkeyPatch) -> 
         ),
         (
             datetime(2026, 11, 12, 20, 10, tzinfo=workflow.SYDNEY),
-            ["vea-crude-evaluate", "asx-200-capture", "asx-300-capture"],
+            ["vea-crude-evaluate", "asx-300-capture"],
         ),
     ],
 )
@@ -227,7 +220,7 @@ def test_run_audit_checks_status_and_exact_target(
 def test_run_audit_ignores_old_or_other_workflow_and_paginates() -> None:
     client = Mock()
     due = datetime(2026, 11, 12, 7, tzinfo=UTC)
-    other = _run("asx-200-capture", V1TaskStatus.COMPLETED, due)
+    other = _run("vea-crude-evaluate", V1TaskStatus.COMPLETED, due)
     old = _run("asx-300-capture", V1TaskStatus.COMPLETED, datetime(2026, 11, 11, 7, tzinfo=UTC))
     wanted = _run("asx-300-capture", V1TaskStatus.COMPLETED, due, payload={"date": "2026-11-12"})
     client.runs.list.side_effect = [
