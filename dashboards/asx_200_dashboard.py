@@ -1,16 +1,26 @@
-"""Read-only dashboard for collected S&P/ASX 200 snapshots."""
+"""Point-in-time valuation dashboard for the dated ASX 200 roster."""
 
-import json
-from datetime import date
-from decimal import Decimal
+import csv
+from collections import defaultdict
+from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from plotly.subplots import make_subplots
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import Engine, create_engine, select
 
 from asx_financials.config import get_settings
+from asx_financials.infrastructure.persistence.schema import (
+    asx_profile_backfills,
+    raw_source_payloads,
+)
+
+ROSTER = Path(__file__).resolve().parents[1] / "data" / "asx200" / "asx200_20260405.csv"
+SYDNEY = ZoneInfo("Australia/Sydney")
 
 
 @st.cache_resource
@@ -18,107 +28,263 @@ def _engine() -> Engine:
     return create_engine(get_settings().database_url, pool_pre_ping=True)
 
 
-def load_snapshots(engine: Engine) -> list[dict[str, Any]]:
+def load_roster(path: Path = ROSTER) -> dict[str, dict[str, str]]:
+    with path.open(encoding="utf-8-sig", newline="") as source:
+        reader = csv.DictReader(source)
+        if not reader.fieldnames or not {"ticker", "name"}.issubset(reader.fieldnames):
+            raise ValueError("ASX 200 roster must contain ticker and name columns")
+        rows = list(reader)
+        roster = {row["ticker"]: row for row in rows}
+    if (
+        len(rows) != 200
+        or len(roster) != 200
+        or any(not ticker or not row["name"] for ticker, row in roster.items())
+    ):
+        raise ValueError("ASX 200 roster must contain 200 distinct named tickers")
+    return roster
+
+
+def load_profiles(engine: Engine, roster: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
+    source = raw_source_payloads
     with engine.connect() as connection:
         return [
             dict(row)
             for row in connection.execute(
-                text("SELECT * FROM asx_200_snapshots ORDER BY session_date DESC")
+                select(
+                    source.c.ticker,
+                    source.c.fetched_at,
+                    source.c.payload,
+                    asx_profile_backfills.c.session_date,
+                )
+                .select_from(source)
+                .outerjoin(
+                    asx_profile_backfills,
+                    asx_profile_backfills.c.raw_payload_id == source.c.raw_payload_id,
+                )
+                .where(
+                    source.c.exchange_code == "ASX",
+                    source.c.segment_name == "company-profile",
+                    source.c.ticker.in_(roster),
+                )
+                .order_by(source.c.fetched_at)
             ).mappings()
         ]
 
 
-def history_chart(snapshots: list[dict[str, Any]]) -> go.Figure:
-    ordered = list(reversed(snapshots))
-    days = [row["session_date"] for row in ordered]
-    figure = make_subplots(
-        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.06, row_heights=[0.7, 0.3]
-    )
-    figure.add_trace(
-        go.Scatter(
-            x=days,
-            y=[float(row["close"]) if row["close"] is not None else None for row in ordered],
-            name="Close (points)",
-            mode="lines+markers",
-        ),
-        row=1,
-        col=1,
-    )
-    for field, label in (
-        ("volume", "Reported volume"),
-        ("average_volume", "Average volume"),
-        ("average_volume_10days", "10-day average volume"),
-    ):
-        figure.add_trace(
-            go.Scatter(
-                x=days,
-                y=[row[field] for row in ordered],
-                name=label,
-                mode="lines+markers",
-            ),
-            row=2,
-            col=1,
+def _positive(value: Any) -> Decimal | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    return number if number.is_finite() and number > 0 else None
+
+
+def _quote_date(payload: dict[str, Any]) -> date | None:
+    quote_time = payload.get("regularMarketTime")
+    if isinstance(quote_time, bool) or not isinstance(quote_time, (int, float)):
+        return None
+    try:
+        return datetime.fromtimestamp(quote_time, UTC).astimezone(SYDNEY).date()
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def summarize(
+    profiles: list[dict[str, Any]], roster: dict[str, dict[str, str]]
+) -> tuple[list[dict[str, Any]], dict[date, list[dict[str, Any]]]]:
+    daily: dict[date, dict[str, dict[str, Any]]] = defaultdict(dict)
+    for profile in profiles:
+        ticker = profile["ticker"]
+        if ticker not in roster:
+            continue
+        fetched_at = profile["fetched_at"]
+        day = profile.get("session_date") or fetched_at.astimezone(SYDNEY).date()
+        current = daily[day].get(ticker)
+        if current is None or fetched_at > current["fetched_at"]:
+            daily[day][ticker] = profile
+
+    history = []
+    details = {}
+    for day, by_ticker in sorted(daily.items()):
+        rows = []
+        total_cap = Decimal(0)
+        numerators = {"trailing": Decimal(0), "forward": Decimal(0)}
+        denominators = {"trailing": Decimal(0), "forward": Decimal(0)}
+        counts = {"trailing": 0, "forward": 0}
+        for ticker, record in sorted(by_ticker.items()):
+            payload = record["payload"]
+            currency = payload.get("currency")
+            cap = _positive(payload.get("marketCap")) if currency == "AUD" else None
+            trailing = _positive(payload.get("trailingPE"))
+            forward = _positive(payload.get("forwardPE"))
+            if cap is not None:
+                total_cap += cap
+                for key, pe in (("trailing", trailing), ("forward", forward)):
+                    if pe is not None:
+                        numerators[key] += cap * pe
+                        denominators[key] += cap
+                        counts[key] += 1
+            rows.append(
+                {
+                    "ticker": ticker,
+                    "company": roster[ticker]["name"],
+                    "currency": currency,
+                    "market_cap_aud": cap,
+                    "trailing_pe": trailing,
+                    "forward_pe": forward,
+                    "fetched_at": record["fetched_at"],
+                    "quote_date": _quote_date(payload),
+                    "source": (
+                        "Weekend backfill" if record.get("session_date") else "Session capture"
+                    ),
+                }
+            )
+        for ticker in sorted(roster.keys() - by_ticker.keys()):
+            rows.append(
+                {
+                    "ticker": ticker,
+                    "company": roster[ticker]["name"],
+                    "currency": None,
+                    "market_cap_aud": None,
+                    "trailing_pe": None,
+                    "forward_pe": None,
+                    "fetched_at": None,
+                    "quote_date": None,
+                    "source": None,
+                }
+            )
+        rows.sort(key=lambda item: item["ticker"])
+        details[day] = rows
+        history.append(
+            {
+                "date": day,
+                "profiles": len(by_ticker),
+                "backfilled": sum(bool(item.get("session_date")) for item in by_ticker.values()),
+                "market_cap_aud": total_cap,
+                **{
+                    f"{key}_pe": (
+                        numerators[key] / denominators[key]
+                        if counts[key] * 10 > len(roster)
+                        else None
+                    )
+                    for key in ("trailing", "forward")
+                },
+                **{f"{key}_count": counts[key] for key in counts},
+                **{
+                    f"{key}_cap_coverage": (
+                        denominators[key] / total_cap if total_cap else None
+                    )
+                    for key in counts
+                },
+            }
         )
-    figure.update_yaxes(title_text="Index points", row=1, col=1)
-    figure.update_yaxes(title_text="Yahoo volume units", row=2, col=1)
-    figure.update_xaxes(title_text="Session date", row=2, col=1)
-    figure.update_layout(hovermode="x unified", height=650)
-    return figure
+    return history, details
 
 
-def _display(value: Any) -> str:
-    if value is None:
-        return "N/A"
-    if isinstance(value, (int, float, Decimal)):
-        return f"{value:,}"
-    return str(value)
-
-
-def show_snapshots(snapshots: list[dict[str, Any]]) -> None:
-    if not snapshots:
-        st.info("No ASX 200 snapshots have been collected yet.")
+def show_dashboard(
+    history: list[dict[str, Any]], details: dict[date, list[dict[str, Any]]]
+) -> None:
+    if not history:
+        st.info(
+            "No stored company-profile snapshots for the supplied roster. "
+            "Ingest the tickers first."
+        )
         return
 
-    latest = snapshots[0]
+    selected = st.selectbox("Snapshot date (Australia/Sydney)", list(reversed(details)))
+    row = next(item for item in history if item["date"] == selected)
     st.caption(
-        f"Latest stored session: {latest['session_date']} | "
-        f"Fetched: {latest['fetched_at']} | {len(snapshots)} stored session(s)"
+        "Fixed roster dated 2026-04-05 (Wikipedia constituent table, not verified current "
+        "or historical S&P index membership). Each date uses the latest stored Yahoo "
+        "profile fetched that Sydney day. Explicit weekend backfills retain their actual "
+        "fetch time; their quote date can precede the session or be unavailable. "
+        "Both are labeled below. "
+        "Only positive P/E "
+        "and market caps quoted in AUD contribute. Each P/E uses its own eligible "
+        "market-cap denominator. "
+        "An aggregate is hidden if 90% or more of the roster lacks eligible data "
+        "(20 or fewer of 200 stocks)."
     )
-    columns = st.columns(5)
-    for column, (label, value) in zip(
-        columns,
-        (
-            ("Close (points)", latest["close"]),
-            ("Reported volume", latest["volume"]),
-            ("Average volume", latest["average_volume"]),
-            ("10-day average volume", latest["average_volume_10days"]),
-            ("Trailing P/E", latest["trailing_pe"]),
-        ),
-        strict=True,
-    ):
-        column.metric(label, _display(value))
+    columns = st.columns(4)
+    columns[0].metric(
+        "Market-cap weighted P/E",
+        f"{row['trailing_pe']:.2f}" if row["trailing_pe"] else "N/A",
+    )
+    columns[1].metric(
+        "Market-cap weighted forward P/E",
+        f"{row['forward_pe']:.2f}" if row["forward_pe"] else "N/A",
+    )
+    columns[2].metric("Profiles / roster", f"{row['profiles']} / 200")
+    columns[3].metric("AUD market cap observed", f"${row['market_cap_aud']:,.0f}")
+    if row["backfilled"]:
+        uncertain = sum(
+            item["source"] == "Weekend backfill"
+            and (item["quote_date"] is None or item["quote_date"] != selected)
+            for item in details[selected]
+        )
+        st.warning(
+            f"{row['backfilled']} profiles for {selected} were fetched after the session "
+            "closed. Their market caps and P/E values reflect the later fetch, not "
+            f"verified historical fundamentals. {uncertain} have an older or unreported "
+            "quote date; see each constituent's fetched_at and quote_date."
+        )
+    st.caption(
+        f"Trailing: {row['trailing_count']} stocks, "
+        f"{row['trailing_cap_coverage']:.1%} of observed AUD cap; "
+        f"forward: {row['forward_count']} stocks, "
+        f"{row['forward_cap_coverage']:.1%} of observed AUD cap."
+        if row["market_cap_aud"]
+        else "No eligible AUD market caps on this date."
+    )
 
-    st.plotly_chart(history_chart(snapshots), width="stretch")
+    if any(item[key] is not None for item in history for key in ("trailing_pe", "forward_pe")):
+        figure = go.Figure()
+        for key, label in (("trailing_pe", "Trailing P/E"), ("forward_pe", "Forward P/E")):
+            figure.add_trace(
+                go.Scatter(
+                    x=[item["date"] for item in history],
+                    y=[float(item[key]) if item[key] is not None else None for item in history],
+                    name=label,
+                    mode="lines+markers",
+                    connectgaps=False,
+                )
+            )
+        figure.update_layout(
+            xaxis_title="Session date (Sydney; weekend backfills labeled in table)",
+            yaxis_title="Market-cap weighted P/E",
+            hovermode="x unified",
+        )
+        st.plotly_chart(figure, width="stretch")
+    else:
+        st.info("No dates have enough eligible stocks to display a weighted P/E.")
+    st.subheader("Daily coverage and valuations")
+    st.dataframe(pd.DataFrame(history), hide_index=True, width="stretch")
+    st.subheader(f"Constituents observed on {selected}")
+    st.dataframe(pd.DataFrame(details[selected]), hide_index=True, width="stretch")
     st.caption(
-        "Volume and averages are Yahoo-reported index figures, not shares in a fund. "
-        "Missing values (including P/E) are not estimated; quote metadata is captured "
-        "at the time of each snapshot."
+        "Missing profiles, non-AUD or absent market caps, and missing/nonpositive P/E "
+        "are excluded. Coverage is against observed AUD market cap, not the entire index; "
+        "these averages are not an official S&P index valuation."
     )
-    st.subheader("All stored snapshots")
-    st.dataframe(
-        [{**row, "info": json.dumps(row["info"], sort_keys=True)} for row in snapshots],
-        hide_index=True,
-        width="stretch",
-    )
-    by_date: dict[date, dict[str, Any]] = {row["session_date"]: row for row in snapshots}
-    selected = st.selectbox("Yahoo metadata captured on", list(by_date))
-    st.json(by_date[selected]["info"])
 
 
 def main() -> None:
-    st.set_page_config(page_title="S&P/ASX 200", layout="wide")
-    st.title("S&P/ASX 200 (^AXJO)")
-    show_snapshots(load_snapshots(_engine()))
+    st.set_page_config(page_title="ASX 200 valuations", layout="wide")
+    st.title("ASX 200 roster valuations")
+    try:
+        roster = load_roster()
+        profiles = load_profiles(_engine(), roster)
+    except (OSError, ValueError) as exc:
+        st.error(str(exc))
+        return
+    except Exception:
+        st.error("Could not read PostgreSQL. Check DATABASE_URL and run Alembic migrations.")
+        return
+    show_dashboard(*summarize(profiles, roster))
+    st.subheader("Dated 200-stock roster")
+    st.dataframe(pd.DataFrame(roster.values()), hide_index=True, width="stretch")
 
 
 if __name__ == "__main__":

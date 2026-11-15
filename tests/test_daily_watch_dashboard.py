@@ -20,11 +20,8 @@ def test_daily_watch_links_to_regression_page() -> None:
     assert streamlit.page_link.call_args_list[1].args == (
         daily_watch_dashboard.asx_200_page,
     )
-    assert streamlit.page_link.call_args_list[1].kwargs == {"label": "S&P/ASX 200"}
-    assert streamlit.page_link.call_args_list[2].args == (
-        daily_watch_dashboard.asx_300_page,
-    )
-    assert streamlit.page_link.call_args_list[2].kwargs == {"label": "ASX 300 valuations"}
+    assert streamlit.page_link.call_args_list[1].kwargs == {"label": "ASX 200 valuations"}
+    assert streamlit.page_link.call_count == 2
 
 
 def test_navigation_registers_daily_watch_as_default() -> None:
@@ -39,7 +36,6 @@ def test_navigation_registers_daily_watch_as_default() -> None:
             streamlit.Page.return_value,
             daily_watch_dashboard.regression_page,
             daily_watch_dashboard.asx_200_page,
-            daily_watch_dashboard.asx_300_page,
         ]
     )
     streamlit.navigation.return_value.run.assert_called_once_with()

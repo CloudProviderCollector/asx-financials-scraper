@@ -1,96 +1,168 @@
-"""ASX 200 dashboard reads and presents every stored snapshot field."""
+"""Point-in-time ASX 200 valuations and coverage."""
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 from dashboards import asx_200_dashboard as dashboard
 
 
-def _snapshots() -> list[dict]:
-    return [
+def _profile(ticker: str, day: int, hour: int, **payload: object) -> dict:
+    return {
+        "ticker": ticker,
+        "fetched_at": datetime(2026, 11, day, hour, tzinfo=UTC),
+        "payload": {"currency": "AUD", **payload},
+    }
+
+
+def test_dated_roster_contains_200_unique_tickers() -> None:
+    roster = dashboard.load_roster()
+    assert len(roster) == 200
+    assert roster["BHP"]["name"]
+
+
+def test_uses_latest_profile_each_sydney_day_and_separate_eligible_denominators() -> None:
+    roster = {ticker: {"name": ticker} for ticker in ("AAA", "BBB", "CCC", "DDD")}
+    profiles = [
+        _profile("AAA", 10, 2, marketCap=100, trailingPE=10, forwardPE=8),
+        _profile("AAA", 10, 3, marketCap=100, trailingPE=20, forwardPE=None),
+        _profile("BBB", 10, 2, marketCap=300, trailingPE=40, forwardPE=16),
+        _profile("CCC", 10, 2, marketCap=100, trailingPE=-1, forwardPE=4, currency="USD"),
+        _profile("DDD", 10, 2, marketCap=0, trailingPE=30, forwardPE=3),
+        _profile("AAA", 11, 2, marketCap=100, trailingPE=None, forwardPE=12),
+    ]
+    history, details = dashboard.summarize(profiles, roster)
+    assert len(history) == 2
+    assert history[0]["trailing_pe"] == Decimal("35")
+    assert history[0]["forward_pe"] == Decimal("16")
+    assert history[0]["trailing_count"] == 2
+    assert history[0]["forward_count"] == 1
+    assert history[0]["forward_cap_coverage"] == Decimal("0.75")
+    assert history[0]["profiles"] == 4
+    assert details[history[0]["date"]][0]["forward_pe"] is None
+    assert history[1]["trailing_pe"] is None
+    assert history[1]["forward_pe"] == 12
+    assert history[1]["profiles"] == 1
+    assert len(details[history[1]["date"]]) == 4
+    assert details[history[1]["date"]][1]["fetched_at"] is None
+
+
+def test_weekend_backfill_uses_session_date_and_retains_actual_fetch_time() -> None:
+    roster = {"AAA": {"name": "AAA"}, "BBB": {"name": "BBB"}}
+    friday = _profile("AAA", 13, 12, marketCap=100, trailingPE=10)
+    saturday = {
+        **_profile("BBB", 14, 3, marketCap=100, trailingPE=20),
+        "session_date": datetime(2026, 11, 13).date(),
+    }
+    history, details = dashboard.summarize([friday, saturday], roster)
+
+    assert len(history) == 1
+    assert history[0]["date"] == saturday["session_date"]
+    assert history[0]["profiles"] == 2
+    assert history[0]["backfilled"] == 1
+    assert history[0]["trailing_pe"] == 15
+    assert details[history[0]["date"]][1]["fetched_at"] == saturday["fetched_at"]
+    assert details[history[0]["date"]][1]["source"] == "Weekend backfill"
+
+
+def test_discloses_older_and_unreported_backfill_quote_dates() -> None:
+    roster = {"QUB": {"name": "QUB"}, "RYM": {"name": "RYM"}}
+    profiles = [
         {
-            "session_date": date(2026, 11, 11),
-            "symbol": "^AXJO",
-            "currency": "AUD",
-            "open": Decimal("9010"),
-            "high": Decimal("9170"),
-            "low": Decimal("9000"),
-            "close": Decimal("9130"),
-            "volume": None,
-            "regular_market_price": Decimal("9130"),
-            "previous_close": Decimal("9129"),
-            "average_volume": 808938,
-            "average_volume_10days": 857600,
-            "trailing_pe": None,
-            "forward_pe": None,
-            "quote_time": datetime(2026, 11, 11, 6, tzinfo=UTC),
-            "info": {"fiftyTwoWeekHigh": 9296.7, "shortName": "S&P/ASX 200 [XJO]"},
-            "fetched_at": datetime(2026, 11, 11, 8, tzinfo=UTC),
+            **_profile("QUB", 15, 2, marketCap=100, trailingPE=10),
+            "session_date": date(2026, 11, 13),
         },
         {
-            "session_date": date(2026, 11, 10),
-            "symbol": "^AXJO",
-            "currency": "AUD",
-            "open": Decimal("9029.7"),
-            "high": Decimal("9159.8"),
-            "low": Decimal("9029.7"),
-            "close": Decimal("9129"),
-            "volume": 900000,
-            "regular_market_price": Decimal("9129"),
-            "previous_close": Decimal("9020.8"),
-            "average_volume": 808000,
-            "average_volume_10days": 850000,
-            "trailing_pe": Decimal("20.5"),
-            "forward_pe": None,
-            "quote_time": datetime(2026, 11, 10, 6, tzinfo=UTC),
-            "info": {},
-            "fetched_at": datetime(2026, 11, 10, 8, tzinfo=UTC),
+            **_profile(
+                "RYM",
+                15,
+                2,
+                marketCap=100,
+                regularMarketTime=int(datetime(2026, 11, 12, 4, tzinfo=UTC).timestamp()),
+            ),
+            "session_date": date(2026, 11, 13),
         },
     ]
+    history, details = dashboard.summarize(profiles, roster)
+    assert [item["quote_date"] for item in details[date(2026, 11, 13)]] == [
+        None,
+        date(2026, 11, 12),
+    ]
+    with patch.object(dashboard, "st") as streamlit:
+        streamlit.selectbox.return_value = date(2026, 11, 13)
+        dashboard.show_dashboard(history, details)
+    assert "2 have an older or unreported quote date" in streamlit.warning.call_args.args[0]
 
 
-def test_loads_all_columns_and_sessions_in_descending_order() -> None:
+def test_uses_sydney_date_and_rejects_nonfinite_or_nonpositive_values() -> None:
+    roster = {"AAA": {"name": "AAA"}}
+    history, _ = dashboard.summarize(
+        [
+            {
+                **_profile("AAA", 10, 14, marketCap="NaN", trailingPE=True),
+                "fetched_at": datetime(2026, 11, 10, 14, tzinfo=timezone(timedelta(hours=0))),
+            },
+            _profile("AAA", 10, 23, marketCap=100, trailingPE="Infinity", forwardPE=5),
+        ],
+        roster,
+    )
+    assert [row["date"].isoformat() for row in history] == ["2026-11-11"]
+    assert history[0]["trailing_pe"] is None
+    assert history[0]["forward_pe"] == 5
+
+
+def test_suppresses_pe_at_90_percent_missing_and_retains_independent_coverage() -> None:
+    roster = {f"T{index:03d}": {"name": str(index)} for index in range(200)}
+    profiles = [
+        _profile(ticker, 10, 2, marketCap=100, trailingPE=10, forwardPE=20)
+        for ticker in list(roster)[:20]
+    ]
+    profiles += [
+        _profile(ticker, 11, 2, marketCap=100, trailingPE=10, forwardPE=20)
+        for ticker in list(roster)[:20]
+    ]
+    profiles.append(_profile("T020", 11, 2, marketCap=100, trailingPE=10))
+    history, details = dashboard.summarize(profiles, roster)
+
+    assert history[0]["trailing_count"] == history[0]["forward_count"] == 20
+    assert history[0]["trailing_pe"] is None
+    assert history[0]["forward_pe"] is None
+    assert history[1]["trailing_count"] == 21
+    assert history[1]["trailing_pe"] == 10
+    assert history[1]["forward_count"] == 20
+    assert history[1]["forward_pe"] is None
+    assert len(details[history[0]["date"]]) == 200
+    with patch.object(dashboard, "st") as streamlit:
+        streamlit.selectbox.return_value = history[0]["date"]
+        dashboard.show_dashboard(history[:1], {history[0]["date"]: details[history[0]["date"]]})
+    streamlit.plotly_chart.assert_not_called()
+    streamlit.info.assert_called_once()
+
+
+def test_loads_only_roster_company_profiles() -> None:
     engine = MagicMock()
     connection = engine.connect.return_value.__enter__.return_value
-    connection.execute.return_value.mappings.return_value = iter(_snapshots())
-
-    assert dashboard.load_snapshots(engine) == _snapshots()
-    statement = str(connection.execute.call_args.args[0])
-    assert "SELECT * FROM asx_200_snapshots ORDER BY session_date DESC" in statement
-
-
-def test_renders_all_columns_history_and_selected_metadata() -> None:
-    snapshots = _snapshots()
-    with patch.object(dashboard, "st") as streamlit:
-        streamlit.columns.return_value = [MagicMock() for _ in range(5)]
-        streamlit.selectbox.return_value = date(2026, 11, 11)
-        dashboard.show_snapshots(snapshots)
-
-    figure = streamlit.plotly_chart.call_args.args[0]
-    assert list(figure.data[0].x) == [date(2026, 11, 10), date(2026, 11, 11)]
-    assert list(figure.data[0].y) == [9129, 9130]
-    assert list(figure.data[1].y) == [900000, None]
-    assert [trace.name for trace in figure.data[1:]] == [
-        "Reported volume",
-        "Average volume",
-        "10-day average volume",
-    ]
-    rows = streamlit.dataframe.call_args.args[0]
-    assert set(rows[0]) == set(snapshots[0])
-    assert '"fiftyTwoWeekHigh": 9296.7' in rows[0]["info"]
-    assert rows[0]["trailing_pe"] is None
-    assert rows[1]["trailing_pe"] == Decimal("20.5")
-    streamlit.json.assert_called_once_with(snapshots[0]["info"])
-    assert streamlit.columns.return_value[4].metric.call_args.args == (
-        "Trailing P/E",
-        "N/A",
+    connection.execute.return_value.mappings.return_value = iter(
+        [_profile("AAA", 10, 12, marketCap=100)]
     )
+    assert len(dashboard.load_profiles(engine, {"AAA": {"name": "AAA"}})) == 1
+    sql = str(connection.execute.call_args.args[0])
+    assert "raw_source_payloads" in sql
+    assert "company-profile" not in sql  # Bound parameters, not string interpolation.
 
 
-def test_empty_state_does_not_render_chart_or_table() -> None:
+def test_renders_two_series_and_missing_values_without_backfill() -> None:
+    roster = {"AAA": {"name": "AAA"}}
+    history, details = dashboard.summarize(
+        [
+            _profile("AAA", 10, 12, marketCap=100, trailingPE=10),
+            _profile("AAA", 11, 12, marketCap=100, forwardPE=9),
+        ],
+        roster,
+    )
     with patch.object(dashboard, "st") as streamlit:
-        dashboard.show_snapshots([])
-    streamlit.info.assert_called_once()
-    streamlit.plotly_chart.assert_not_called()
-    streamlit.dataframe.assert_not_called()
+        streamlit.selectbox.return_value = history[-1]["date"]
+        dashboard.show_dashboard(history, details)
+    figure = streamlit.plotly_chart.call_args.args[0]
+    assert [list(trace.y) for trace in figure.data] == [[10.0, None], [None, 9.0]]
+    assert all(not trace.connectgaps for trace in figure.data)

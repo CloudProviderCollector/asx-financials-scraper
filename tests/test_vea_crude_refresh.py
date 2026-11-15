@@ -3,7 +3,7 @@
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import ANY, Mock
 
 import pandas as pd
 import pytest
@@ -110,7 +110,7 @@ def test_refresh_limits_prices_and_only_fetches_selected_series(
                 == 0
             )
         assert provider._fetch_price_history.call_count == 1
-        yahoo.assert_any_call("BZ=F")
+        yahoo.assert_any_call("BZ=F", session=ANY)
         ticker.history.assert_called_once_with(period="max", auto_adjust=False)
     finally:
         with engine.begin() as conn:

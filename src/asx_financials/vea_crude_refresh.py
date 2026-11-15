@@ -3,6 +3,7 @@
 from datetime import UTC, date, datetime
 
 import yfinance as yf
+from curl_cffi import requests
 from sqlalchemy import Engine, func, select
 from sqlalchemy.dialects.postgresql import insert
 
@@ -35,8 +36,12 @@ def latest_dates(engine: Engine) -> tuple[date | None, date | None]:
 def refresh_vea(engine: Engine, through: date) -> None:
     latest_vea, _ = latest_dates(engine)
     failures: list[SegmentFailure] = []
+    # yfinance shares its session across tickers; profile capture closes its paced session.
     bars = YFinanceProvider()._fetch_price_history(
-        yf.Ticker("VEA.AX"), latest_vea, datetime.now(UTC), failures
+        yf.Ticker("VEA.AX", session=requests.Session(impersonate="chrome")),
+        latest_vea,
+        datetime.now(UTC),
+        failures,
     )
     if failures:
         raise RuntimeError("VEA price refresh failed: " + "; ".join(f.reason for f in failures))
@@ -85,7 +90,9 @@ def refresh_vea(engine: Engine, through: date) -> None:
 
 
 def refresh_brent(engine: Engine, through: date) -> None:
-    frame = yf.Ticker(BRENT_SYMBOL).history(period="max", auto_adjust=False)
+    frame = yf.Ticker(
+        BRENT_SYMBOL, session=requests.Session(impersonate="chrome")
+    ).history(period="max", auto_adjust=False)
     if frame.empty or "Close" not in frame:
         raise ValueError(f"Yahoo returned no {BRENT_SYMBOL} daily futures closes")
     rows = []

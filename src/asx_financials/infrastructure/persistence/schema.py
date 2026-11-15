@@ -137,6 +137,20 @@ raw_source_payloads = Table(
     Column("fetched_at", DateTime(timezone=True), nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
+asx_profile_backfills = Table(
+    "asx_profile_backfills",
+    metadata,
+    Column("session_date", Date, primary_key=True),
+    Column("ticker", String(20), primary_key=True),
+    Column(
+        "raw_payload_id",
+        String(36),
+        ForeignKey("raw_source_payloads.raw_payload_id"),
+        nullable=False,
+        unique=True,
+    ),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
+)
 Index("ix_raw_payloads_run", raw_source_payloads.c.run_id)
 Index(
     "ix_raw_payloads_ticker_segment",
