@@ -184,6 +184,43 @@ class YFinanceProvider:
             segment_failures=failures,
         )
 
+    def fetch_daily_price(
+        self, ticker: AsxTicker, trading_date: date, session: Any = None
+    ) -> DailyPriceBar:
+        """Fetch the completed session's OHLCV without requesting historical prices."""
+        fetched_at_utc = _utcnow()
+        if fetched_at_utc.astimezone(ASX_TIMEZONE).date() != trading_date:
+            raise RuntimeError(f"{ticker.value}: daily price fetch ran past the target date")
+        yahoo_ticker = yf.Ticker(ticker.yahoo_symbol, session=session)
+        failures: list[SegmentFailure] = []
+        bars = self._fetch_price_history(yahoo_ticker, trading_date, fetched_at_utc, failures)
+        if failures:
+            raise ValueError(
+                f"{ticker.value}: daily price fetch failed: "
+                + "; ".join(failure.reason for failure in failures)
+            )
+        matching = [
+            bar for bar in bars if bar.trading_date == trading_date and bar.volume is not None
+        ]
+        if len(matching) != 1:
+            raise ValueError(f"{ticker.value}: no daily price and volume for {trading_date}")
+        return matching[0]
+
+    def fetch_all_daily_prices(self, ticker: AsxTicker, session: Any = None) -> list[DailyPriceBar]:
+        """Fetch all available daily OHLCV bars without fetching profiles or statements."""
+        failures: list[SegmentFailure] = []
+        bars = self._fetch_price_history(
+            yf.Ticker(ticker.yahoo_symbol, session=session), None, _utcnow(), failures
+        )
+        if failures:
+            raise ValueError(
+                f"{ticker.value}: price history failed: "
+                + "; ".join(failure.reason for failure in failures)
+            )
+        if not bars:
+            raise ValueError(f"{ticker.value}: Yahoo returned no daily prices")
+        return bars
+
     def fetch(
         self,
         ticker: AsxTicker,

@@ -1,4 +1,4 @@
-"""Capture point-in-time ASX 200 company profiles after the Sydney market closes."""
+"""Capture ASX 200 company profiles and daily prices after the Sydney market closes."""
 
 import logging
 import time
@@ -19,7 +19,7 @@ from sqlalchemy import Engine, create_engine, select, text
 from asx_financials.config import get_settings
 from asx_financials.domain.enums import IngestionRunStatus
 from asx_financials.domain.value_objects import AsxTicker
-from asx_financials.infrastructure.persistence.schema import raw_source_payloads
+from asx_financials.infrastructure.persistence.schema import daily_prices, raw_source_payloads
 from asx_financials.infrastructure.persistence.store import PostgresFinancialDataStore
 from asx_financials.infrastructure.providers.yfinance_provider import YFinanceProvider
 from asx_financials.ingest_ticker_csv import load_tickers
@@ -77,8 +77,22 @@ def completed_tickers(engine: Engine, day: date) -> set[str]:
         )
 
 
+def completed_price_tickers(engine: Engine, day: date) -> set[str]:
+    with engine.connect() as connection:
+        return set(
+            connection.scalars(
+                select(daily_prices.c.ticker).where(
+                    daily_prices.c.exchange_code == "ASX",
+                    daily_prices.c.trading_date == day,
+                    daily_prices.c.close.is_not(None),
+                    daily_prices.c.volume.is_not(None),
+                )
+            )
+        )
+
+
 def capture(engine: Engine, now: datetime | None = None) -> int:
-    """Resume today's roster; a failed fetch leaves that ticker eligible for retry."""
+    """Resume today's roster; only a saved profile and price bar complete a ticker."""
     day = session_today(now or datetime.now(UTC))
     if day is None:
         return 0
@@ -92,7 +106,7 @@ def capture(engine: Engine, now: datetime | None = None) -> int:
         ):
             raise RuntimeError("ASX 200 profile capture is already running; retry later")
         try:
-            completed = completed_tickers(engine, day)
+            completed = completed_tickers(engine, day) & completed_price_tickers(engine, day)
             store = PostgresFinancialDataStore(engine)
             provider = YFinanceProvider()
             captured = 0
@@ -113,14 +127,18 @@ def capture(engine: Engine, now: datetime | None = None) -> int:
                             raise ValueError(f"{symbol}: Yahoo returned no company profile")
                         if result.company_profile.fetched_at_utc.astimezone(SYDNEY).date() != day:
                             raise RuntimeError(f"{symbol}: profile fetch ran past midnight")
+                        price_bar = provider.fetch_daily_price(ticker, day, session=session)
+                        if session_today(datetime.now(UTC)) != day:
+                            raise RuntimeError(f"{symbol}: price fetch ran past midnight")
                         store.complete_ingestion_run(
                             ingestion_run_id=run_id,
                             ticker=ticker,
                             yahoo_symbol=ticker.yahoo_symbol,
                             status=IngestionRunStatus.SUCCEEDED.value,
                             completed_at_utc=datetime.now(UTC),
-                            message="Point-in-time company profile captured.",
+                            message="Point-in-time company profile and daily price captured.",
                             company_profile=result.company_profile,
+                            daily_price_bars=[price_bar],
                             statement_snapshots=[],
                             raw_payloads=result.raw_payloads,
                             segment_failures=[],
@@ -132,7 +150,7 @@ def capture(engine: Engine, now: datetime | None = None) -> int:
                         raise
                     captured += 1
             LOGGER.info(
-                "Captured %s ASX 200 profiles for %s (%s already stored)",
+                "Captured %s ASX 200 profiles and daily prices for %s (%s already stored)",
                 captured,
                 day,
                 len(completed),

@@ -2,6 +2,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pandas as pd
+import pytest
 
 from asx_financials.domain.enums import StatementFrequency, StatementType
 from asx_financials.domain.value_objects import AsxTicker
@@ -103,6 +104,52 @@ def test_profile_only_fetch_does_not_request_history_or_statements(monkeypatch) 
     assert result.company_profile is not None
     assert result.company_profile.profile_payload["trailingPE"] == 12
     assert result.raw_payloads[0].payload["forwardPE"] == 10
+
+
+def test_daily_price_fetch_requests_only_target_session(monkeypatch) -> None:
+    ticker = StubTicker()
+    monkeypatch.setattr(yfinance_provider.yf, "Ticker", lambda *args, **kwargs: ticker)
+    monkeypatch.setattr(yfinance_provider, "_utcnow", lambda: datetime(2026, 4, 23, 8, tzinfo=UTC))
+
+    bar = YFinanceProvider().fetch_daily_price(AsxTicker.parse("BHP"), date(2026, 4, 23))
+
+    assert ticker.history_options == {
+        "interval": "1d",
+        "auto_adjust": False,
+        "start": "2026-04-23",
+        "end": "2026-04-24",
+    }
+    assert bar.trading_date == date(2026, 4, 23)
+    assert bar.close == Decimal("11.5")
+    assert bar.volume == 123456
+
+
+def test_daily_price_fetch_rejects_missing_or_invalid_volume(monkeypatch) -> None:
+    class MissingVolumeTicker(StubTicker):
+        def history(self, **kwargs):
+            frame = super().history(**kwargs)
+            frame.loc[frame.index[-1], "Volume"] = float("nan")
+            return frame
+
+    monkeypatch.setattr(
+        yfinance_provider.yf, "Ticker", lambda *args, **kwargs: MissingVolumeTicker()
+    )
+    monkeypatch.setattr(yfinance_provider, "_utcnow", lambda: datetime(2026, 4, 23, 8, tzinfo=UTC))
+
+    with pytest.raises(ValueError, match="Missing volume"):
+        YFinanceProvider().fetch_daily_price(AsxTicker.parse("BHP"), date(2026, 4, 23))
+
+
+def test_daily_price_fetch_rejects_stale_bar(monkeypatch) -> None:
+    class StaleTicker(StubTicker):
+        def history(self, **kwargs):
+            return super().history(**kwargs).iloc[:1]
+
+    monkeypatch.setattr(yfinance_provider.yf, "Ticker", lambda *args, **kwargs: StaleTicker())
+    monkeypatch.setattr(yfinance_provider, "_utcnow", lambda: datetime(2026, 4, 23, 8, tzinfo=UTC))
+
+    with pytest.raises(ValueError, match="no daily price and volume"):
+        YFinanceProvider().fetch_daily_price(AsxTicker.parse("BHP"), date(2026, 4, 23))
 
 
 def test_history_initial_fetch_requests_all_available_data(monkeypatch) -> None:

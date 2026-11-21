@@ -1,4 +1,4 @@
-"""ASX 200 profile-only captures and request pacing."""
+"""ASX 200 profile and daily price captures and request pacing."""
 
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
@@ -78,7 +78,7 @@ def test_completed_profiles_only_count_after_market_close() -> None:
     ]
 
 
-def test_resume_skips_stored_profiles_and_fetches_only_missing(
+def test_resume_requires_both_profile_and_daily_price(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     engine = MagicMock()
@@ -96,8 +96,15 @@ def test_resume_skips_stored_profiles_and_fetches_only_missing(
     monkeypatch.setattr(
         workflow,
         "completed_tickers",
+        lambda engine, day: {"BHP", "CBA", *[f"T{i:03}" for i in range(198)]},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "completed_price_tickers",
         lambda engine, day: {"BHP", *[f"T{i:03}" for i in range(198)]},
     )
+    price_bar = Mock()
+    provider.fetch_daily_price.return_value = price_bar
     monkeypatch.setattr(workflow, "PostgresFinancialDataStore", lambda engine: store)
     monkeypatch.setattr(workflow, "YFinanceProvider", lambda: provider)
     monkeypatch.setattr(workflow, "PacedSession", MagicMock())
@@ -105,12 +112,23 @@ def test_resume_skips_stored_profiles_and_fetches_only_missing(
 
     assert workflow.capture(engine, datetime(2026, 11, 12, 17, tzinfo=workflow.SYDNEY)) == 1
     assert provider.fetch_profile.call_args.args[0].value == "CBA"
+    assert provider.fetch_daily_price.call_args.args[:2][1] == date(2026, 11, 12)
+    assert store.complete_ingestion_run.call_args.kwargs["daily_price_bars"] == [price_bar]
     assert (
         store.complete_ingestion_run.call_args.kwargs["raw_payloads"]
         == provider.fetch_profile.return_value.raw_payloads
     )
     assert store.complete_ingestion_run.call_args.kwargs["statement_snapshots"] == []
     engine.connect.return_value.__enter__.return_value.execute.assert_called()
+
+
+def test_completed_price_tickers_only_reads_target_session() -> None:
+    engine = MagicMock()
+    workflow.completed_price_tickers(engine, date(2026, 11, 12))
+    query = engine.connect.return_value.__enter__.return_value.scalars.call_args.args[0]
+    assert date(2026, 11, 12) in query.compile().params.values()
+    assert "daily_prices.volume IS NOT NULL" in str(query)
+    assert "daily_prices.close IS NOT NULL" in str(query)
 
 
 def test_failed_profile_remains_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -120,6 +138,7 @@ def test_failed_profile_remains_retryable(monkeypatch: pytest.MonkeyPatch) -> No
     provider.fetch_profile.return_value = SimpleNamespace(company_profile=None)
     monkeypatch.setattr(workflow, "load_tickers", lambda path: ["CBA"] * 200)
     monkeypatch.setattr(workflow, "completed_tickers", lambda engine, day: set())
+    monkeypatch.setattr(workflow, "completed_price_tickers", lambda engine, day: set())
     monkeypatch.setattr(workflow, "PostgresFinancialDataStore", lambda engine: store)
     monkeypatch.setattr(workflow, "YFinanceProvider", lambda: provider)
     monkeypatch.setattr(workflow, "PacedSession", MagicMock())
@@ -142,12 +161,37 @@ def test_profile_finishing_after_midnight_is_not_saved(monkeypatch: pytest.Monke
     )
     monkeypatch.setattr(workflow, "load_tickers", lambda path: ["CBA"] * 200)
     monkeypatch.setattr(workflow, "completed_tickers", lambda engine, day: set())
+    monkeypatch.setattr(workflow, "completed_price_tickers", lambda engine, day: set())
     monkeypatch.setattr(workflow, "PostgresFinancialDataStore", lambda engine: store)
     monkeypatch.setattr(workflow, "YFinanceProvider", lambda: provider)
     monkeypatch.setattr(workflow, "PacedSession", MagicMock())
     monkeypatch.setattr(workflow, "datetime", AfterClose)
 
     with pytest.raises(RuntimeError, match="past midnight"):
+        workflow.capture(engine, datetime(2026, 11, 12, 17, tzinfo=workflow.SYDNEY))
+    store.mark_ingestion_run_failed.assert_called_once()
+    store.complete_ingestion_run.assert_not_called()
+
+
+def test_missing_daily_price_fails_without_saving_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = MagicMock()
+    store = Mock()
+    provider = Mock()
+    provider.fetch_profile.return_value = SimpleNamespace(
+        company_profile=SimpleNamespace(
+            fetched_at_utc=datetime(2026, 11, 12, 17, tzinfo=workflow.SYDNEY)
+        )
+    )
+    provider.fetch_daily_price.side_effect = ValueError("no daily price and volume")
+    monkeypatch.setattr(workflow, "load_tickers", lambda path: ["CBA"] * 200)
+    monkeypatch.setattr(workflow, "completed_tickers", lambda engine, day: set())
+    monkeypatch.setattr(workflow, "completed_price_tickers", lambda engine, day: set())
+    monkeypatch.setattr(workflow, "PostgresFinancialDataStore", lambda engine: store)
+    monkeypatch.setattr(workflow, "YFinanceProvider", lambda: provider)
+    monkeypatch.setattr(workflow, "PacedSession", MagicMock())
+    monkeypatch.setattr(workflow, "datetime", AfterClose)
+
+    with pytest.raises(ValueError, match="no daily price and volume"):
         workflow.capture(engine, datetime(2026, 11, 12, 17, tzinfo=workflow.SYDNEY))
     store.mark_ingestion_run_failed.assert_called_once()
     store.complete_ingestion_run.assert_not_called()
