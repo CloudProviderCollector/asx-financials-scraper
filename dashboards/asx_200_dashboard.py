@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from sqlalchemy import Engine, create_engine, select
+from sqlalchemy import Engine, create_engine, select, text
 
 from asx_financials.config import get_settings
 from asx_financials.infrastructure.persistence.schema import (
@@ -25,7 +25,9 @@ SYDNEY = ZoneInfo("Australia/Sydney")
 
 @st.cache_resource
 def _engine() -> Engine:
-    return create_engine(get_settings().database_url, pool_pre_ping=True)
+    return create_engine(
+        get_settings().database_url, pool_pre_ping=True, connect_args={"connect_timeout": 5}
+    )
 
 
 def load_roster(path: Path = ROSTER) -> dict[str, dict[str, str]]:
@@ -69,6 +71,59 @@ def load_profiles(engine: Engine, roster: dict[str, dict[str, str]]) -> list[dic
                 .order_by(source.c.fetched_at)
             ).mappings()
         ]
+
+
+def load_index(engine: Engine) -> list[tuple[date, float]]:
+    with engine.connect() as connection:
+        return [
+            (row.session_date, float(row.close))
+            for row in connection.execute(
+                text(
+                    "SELECT session_date, close FROM asx_200_snapshots "
+                    "WHERE symbol = :symbol AND close IS NOT NULL ORDER BY session_date"
+                ),
+                {"symbol": "^AXJO"},
+            )
+        ]
+
+
+def index_chart(prices: list[tuple[date, float]]) -> go.Figure:
+    latest = prices[-1][0]
+    figure = go.Figure(
+        go.Scatter(
+            x=[day for day, _ in prices],
+            y=[close for _, close in prices],
+            name="ASX 200 close",
+            mode="lines",
+        )
+    )
+    figure.update_xaxes(
+        title_text="ASX trading date",
+        range=[pd.Timestamp(latest) - pd.DateOffset(months=1), latest],
+        rangeselector={
+            "buttons": [
+                {"count": 1, "label": "1m", "step": "month", "stepmode": "backward"},
+                {"count": 3, "label": "3m", "step": "month", "stepmode": "backward"},
+                {"count": 6, "label": "6m", "step": "month", "stepmode": "backward"},
+                {"count": 1, "label": "1y", "step": "year", "stepmode": "backward"},
+                {"count": 3, "label": "3y", "step": "year", "stepmode": "backward"},
+                {"count": 5, "label": "5y", "step": "year", "stepmode": "backward"},
+                {"label": "All", "step": "all"},
+            ]
+        },
+    )
+    figure.update_yaxes(title_text="Index close (points)")
+    figure.update_layout(hovermode="x unified")
+    return figure
+
+
+def show_index(prices: list[tuple[date, float]]) -> None:
+    st.subheader("ASX 200 index")
+    if prices:
+        st.plotly_chart(index_chart(prices), width="stretch")
+        st.caption("Historical ^AXJO daily closes; the default view shows the latest month.")
+    else:
+        st.info("No ASX 200 index snapshots are stored yet.")
 
 
 def _positive(value: Any) -> Decimal | None:
@@ -173,9 +228,7 @@ def summarize(
                 },
                 **{f"{key}_count": counts[key] for key in counts},
                 **{
-                    f"{key}_cap_coverage": (
-                        denominators[key] / total_cap if total_cap else None
-                    )
+                    f"{key}_cap_coverage": (denominators[key] / total_cap if total_cap else None)
                     for key in counts
                 },
             }
@@ -188,8 +241,7 @@ def show_dashboard(
 ) -> None:
     if not history:
         st.info(
-            "No stored company-profile snapshots for the supplied roster. "
-            "Ingest the tickers first."
+            "No stored company-profile snapshots for the supplied roster. Ingest the tickers first."
         )
         return
 
@@ -274,14 +326,17 @@ def main() -> None:
     st.set_page_config(page_title="ASX 200 valuations", layout="wide")
     st.title("ASX 200 roster valuations")
     try:
+        engine = _engine()
+        prices = load_index(engine)
         roster = load_roster()
-        profiles = load_profiles(_engine(), roster)
+        profiles = load_profiles(engine, roster)
     except (OSError, ValueError) as exc:
         st.error(str(exc))
         return
     except Exception:
         st.error("Could not read PostgreSQL. Check DATABASE_URL and run Alembic migrations.")
         return
+    show_index(prices)
     show_dashboard(*summarize(profiles, roster))
     st.subheader("Dated 200-stock roster")
     st.dataframe(pd.DataFrame(roster.values()), hide_index=True, width="stretch")

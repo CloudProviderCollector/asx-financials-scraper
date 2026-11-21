@@ -9,6 +9,7 @@ from typing import Any
 from hatchet_sdk import Hatchet
 
 from workflows import catch_up
+from workflows.asx_200_index_workflow import register_workflow as register_asx_200_index
 from workflows.asx_200_profiles_workflow import register_workflows as register_asx_200
 from workflows.vea_crude_workflow import register_workflow as register_vea
 
@@ -19,8 +20,9 @@ def register_workflows() -> tuple[Hatchet, list[Any]]:
     hatchet = Hatchet()
     vea = register_vea(hatchet)
     asx_200 = register_asx_200(hatchet)
-    scheduler = catch_up.register_workflow(hatchet, vea, asx_200)
-    return hatchet, [vea, asx_200, scheduler]
+    index = register_asx_200_index(hatchet)
+    scheduler = catch_up.register_workflow(hatchet, vea, asx_200, index)
+    return hatchet, [vea, asx_200, index, scheduler]
 
 
 def main() -> None:

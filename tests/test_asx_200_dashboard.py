@@ -2,6 +2,7 @@
 
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from dashboards import asx_200_dashboard as dashboard
@@ -19,6 +20,51 @@ def test_dated_roster_contains_200_unique_tickers() -> None:
     roster = dashboard.load_roster()
     assert len(roster) == 200
     assert roster["BHP"]["name"]
+
+
+def test_loads_stored_index_closes_in_date_order() -> None:
+    engine = MagicMock()
+    connection = engine.connect.return_value.__enter__.return_value
+    connection.execute.return_value = [
+        SimpleNamespace(session_date=date(2026, 11, 12), close=Decimal("8700.25")),
+        SimpleNamespace(session_date=date(2026, 11, 13), close=Decimal("8710.50")),
+    ]
+    assert dashboard.load_index(engine) == [
+        (date(2026, 11, 12), 8700.25),
+        (date(2026, 11, 13), 8710.5),
+    ]
+    query = str(connection.execute.call_args.args[0])
+    assert "asx_200_snapshots" in query
+    assert "ORDER BY session_date" in query
+    assert connection.execute.call_args.args[1] == {"symbol": "^AXJO"}
+
+
+def test_index_chart_defaults_to_latest_month_and_offers_longer_ranges() -> None:
+    prices = [
+        (date(2021, 11, 16), 7300.0),
+        (date(2026, 10, 13), 8600.0),
+        (date(2026, 11, 13), 8700.0),
+    ]
+    figure = dashboard.index_chart(prices)
+    assert list(figure.data[0].y) == [7300.0, 8600.0, 8700.0]
+    assert figure.layout.xaxis.range[0].date() == date(2026, 10, 13)
+    assert figure.layout.xaxis.range[1] == date(2026, 11, 13)
+    assert [button.label for button in figure.layout.xaxis.rangeselector.buttons] == [
+        "1m",
+        "3m",
+        "6m",
+        "1y",
+        "3y",
+        "5y",
+        "All",
+    ]
+
+
+def test_index_chart_has_empty_state() -> None:
+    with patch.object(dashboard, "st") as streamlit:
+        dashboard.show_index([])
+    streamlit.info.assert_called_once()
+    streamlit.plotly_chart.assert_not_called()
 
 
 def test_uses_latest_profile_each_sydney_day_and_separate_eligible_denominators() -> None:

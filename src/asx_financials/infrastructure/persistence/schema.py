@@ -42,6 +42,26 @@ Index(
     commodity_prices.c.observation_date.desc(),
 )
 
+exchange_rates = Table(
+    "exchange_rates",
+    metadata,
+    Column("source", String(80), primary_key=True),
+    Column("series", String(80), primary_key=True),
+    Column("observation_date", Date, primary_key=True),
+    Column("base_currency", String(3), nullable=False),
+    Column("quote_currency", String(3), nullable=False),
+    Column("rate", Numeric(24, 10), nullable=False),
+    Column("fetched_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint("rate > 0", name="ck_exchange_rates_positive"),
+    CheckConstraint("base_currency <> quote_currency", name="ck_exchange_rates_currencies"),
+)
+Index(
+    "ix_exchange_rates_lookup",
+    exchange_rates.c.base_currency,
+    exchange_rates.c.quote_currency,
+    exchange_rates.c.observation_date.desc(),
+)
+
 tickers = Table(
     "tickers",
     metadata,

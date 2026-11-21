@@ -9,6 +9,7 @@ from hatchet_sdk import Hatchet
 from hatchet_sdk.clients.rest.models import V1TaskStatus
 from hatchet_sdk.exceptions import IdempotencyCollisionError
 
+from workflows.asx_200_index_workflow import CaptureInput as IndexInput
 from workflows.asx_200_profiles_workflow import SYDNEY, session_today
 from workflows.asx_200_profiles_workflow import CaptureInput as Asx200Input
 from workflows.vea_crude_workflow import CheckInput, target_session, yesterday
@@ -16,12 +17,14 @@ from workflows.vea_crude_workflow import CheckInput, target_session, yesterday
 LOGGER = logging.getLogger(__name__)
 job: Any = None
 asx_200_job: Any = None
+index_job: Any = None
 
 
-def register_workflow(hatchet: Hatchet, vea: Any, asx_200: Any) -> Any:
-    global job, asx_200_job
+def register_workflow(hatchet: Hatchet, vea: Any, asx_200: Any, index: Any) -> Any:
+    global job, asx_200_job, index_job
     job, asx_200_job = vea, asx_200
-    scheduler = hatchet.workflow(name="market-catch-up", on_crons=["10 * * * *"])
+    index_job = index
+    scheduler = hatchet.workflow(name="market-catch-up", on_crons=["10,25,40,55 * * * *"])
 
     @scheduler.task()
     def catch_up_check(input: Any, ctx: Any) -> None:
@@ -47,6 +50,16 @@ def dispatch_asx_200(now: datetime) -> None:
         LOGGER.info("ASX 200 profile capture for %s is already queued or running", day)
 
 
+def dispatch_index(now: datetime) -> None:
+    day = session_today(now)
+    if day is None:
+        return
+    try:
+        index_job.run(input=IndexInput(date=day.isoformat()), wait_for_result=False)
+    except IdempotencyCollisionError:
+        LOGGER.info("ASX 200 index capture for %s is already queued or running", day)
+
+
 def _due(day: date, hour: int) -> datetime:
     return datetime.combine(day, clock_time(hour), UTC)
 
@@ -55,6 +68,7 @@ def _run_target(run: Any, name: str) -> str | None:
     task = {
         "vea-crude-evaluate": "monitor",
         "asx-200-profile-capture": "capture_task",
+        "asx-200-index-capture": "capture_task",
     }[name]
     output = run.output.get("target", run.output.get(task, {}))
     if isinstance(output, dict):
@@ -110,6 +124,12 @@ def run_catch_up(hatchet: Hatchet, now: datetime | None = None) -> None:
             asx_200_day,
             _due(asx_200_day, 7) if asx_200_day else None,
             lambda: dispatch_asx_200(now),
+        ),
+        (
+            "asx-200-index-capture",
+            asx_200_day,
+            _due(asx_200_day, 7) if asx_200_day else None,
+            lambda: dispatch_index(now),
         ),
     )
     errors: list[Exception] = []

@@ -362,14 +362,18 @@ def fund_utilization(
 
 
 def trade_chart(
-    shares: list[tuple[date, Decimal]], trades: list[Trade], open_buy_date: date | None
+    shares: list[tuple[date, Decimal]],
+    trades: list[Trade],
+    open_buy_date: date | None,
+    *,
+    ticker: str = "VEA",
 ) -> go.Figure:
     figure = go.Figure()
     figure.add_trace(
         go.Scatter(
             x=[day for day, _ in shares],
             y=[float(price) for _, price in shares],
-            name="VEA.AX close (AUD/share)",
+            name=f"{ticker}.AX close (AUD/share)",
             mode="lines",
         )
     )
@@ -379,15 +383,17 @@ def trade_chart(
     if open_buy_date is not None:
         figure.add_vline(x=open_buy_date.isoformat(), line_color="red", line_dash="dash")
     figure.update_xaxes(title_text="Date")
-    figure.update_yaxes(title_text="VEA close (AUD/share)")
+    figure.update_yaxes(title_text=f"{ticker} close (AUD/share)")
     figure.update_layout(hovermode="x unified", height=650)
     return figure
 
 
-def ratio_histogram(ratios: list[tuple[date, Decimal]]) -> go.Figure:
+def ratio_histogram(
+    ratios: list[tuple[date, Decimal]], *, ticker: str = "VEA", commodity: str = "Brent"
+) -> go.Figure:
     ratio_values = [value for _, value in ratios if value > 0]
     values = [log(float(value)) for value in ratio_values]
-    histogram = go.Histogram(x=values, name="log(normalized VEA / normalized Brent)")
+    histogram = go.Histogram(x=values, name=f"log(normalized {ticker} / normalized {commodity})")
     if values:
         minimum, maximum = min(values), max(values)
         if minimum == maximum:
@@ -410,7 +416,7 @@ def ratio_histogram(ratios: list[tuple[date, Decimal]]) -> go.Figure:
                 line_color=color,
                 line_dash="dash",
             )
-    figure.update_xaxes(title_text="log(normalized VEA / normalized Brent) (unitless)")
+    figure.update_xaxes(title_text=f"log(normalized {ticker} / normalized {commodity}) (unitless)")
     figure.update_yaxes(title_text="Number of trading dates")
     figure.update_layout(height=500, bargap=0.05)
     return figure
@@ -420,6 +426,9 @@ def vea_per_crude_chart(
     shares: list[tuple[date, Decimal]],
     oil: list[tuple[date, Decimal]],
     ratios: list[tuple[date, Decimal]] | None = None,
+    *,
+    ticker: str = "VEA",
+    commodity: str = "Brent",
 ) -> go.Figure:
     if ratios is None:
         ratios = _normalized_ratios(shares, oil)
@@ -428,7 +437,7 @@ def vea_per_crude_chart(
         go.Scatter(
             x=[day for day, _ in shares],
             y=[float(value) for _, value in shares],
-            name="VEA.AX close (AUD/share)",
+            name=f"{ticker}.AX close (AUD/share)",
             mode="lines",
         ),
         secondary_y=False,
@@ -437,7 +446,7 @@ def vea_per_crude_chart(
         go.Scatter(
             x=[day for day, _ in ratios],
             y=[float(value) for _, value in ratios],
-            name="Normalized VEA / normalized Brent",
+            name=f"Normalized {ticker} / normalized {commodity}",
             mode="lines",
         ),
         secondary_y=True,
@@ -448,7 +457,7 @@ def vea_per_crude_chart(
             go.Scatter(
                 x=[shares[0][0], shares[-1][0]],
                 y=[float(median_ratio)] * 2,
-                name=f"Median normalized VEA / Brent ({median_ratio:.3f})",
+                name=f"Median normalized {ticker} / {commodity} ({median_ratio:.3f})",
                 mode="lines",
                 line={"dash": "dash"},
             ),
@@ -474,8 +483,11 @@ def vea_per_crude_chart(
                 secondary_y=True,
             )
     figure.update_xaxes(title_text="Date")
-    figure.update_yaxes(title_text="VEA close (AUD/share)", secondary_y=False)
-    figure.update_yaxes(title_text="Normalized VEA / normalized Brent (unitless)", secondary_y=True)
+    figure.update_yaxes(title_text=f"{ticker} close (AUD/share)", secondary_y=False)
+    figure.update_yaxes(
+        title_text=f"Normalized {ticker} / normalized {commodity} (unitless)",
+        secondary_y=True,
+    )
     figure.update_layout(hovermode="x unified", height=650)
     return figure
 

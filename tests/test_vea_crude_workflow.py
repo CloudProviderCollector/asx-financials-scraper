@@ -60,14 +60,17 @@ def test_hatchet_registers_one_market_scheduler_and_independent_jobs(
     assert [item.name for item in registered] == [
         "vea-crude-evaluate",
         "asx-200-profile-capture",
+        "asx-200-index-capture",
         "market-catch-up",
     ]
     assert registered[0].idempotency.key_expression == "input.date"
     assert registered[1].idempotency.key_expression == "input.date"
+    assert registered[2].idempotency.key_expression == '"asx-200-index-capture:" + input.date'
     assert [item.crons for item in registered] == [
         ["0 23 * * *"],
         ["0 7 * * *"],
-        ["10 * * * *"],
+        ["0 7 * * *"],
+        ["10,25,40,55 * * * *"],
     ]
 
 
@@ -83,10 +86,11 @@ def test_catch_up_dispatches_each_missing_run_and_reports_failure(
     client = Mock()
     monkeypatch.setattr(catch_up, "dispatch", fail)
     monkeypatch.setattr(catch_up, "dispatch_asx_200", lambda now: calls.append("ASX 200"))
+    monkeypatch.setattr(catch_up, "dispatch_index", lambda now: calls.append("INDEX"))
     monkeypatch.setattr(catch_up, "_has_success_or_active_run", lambda *args: False)
     with pytest.raises(ExceptionGroup, match="Market catch-up dispatch failed"):
         catch_up.run_catch_up(client, datetime(2026, 11, 12, 20, 10, tzinfo=workflow.SYDNEY))
-    assert calls == ["VEA", "ASX 200"]
+    assert calls == ["VEA", "ASX 200", "INDEX"]
 
 
 def test_asx_200_dispatch_uses_date_key_and_skips_before_close(
@@ -104,7 +108,20 @@ def test_asx_200_dispatch_uses_date_key_and_skips_before_close(
     }
 
 
-def test_scheduler_runs_catch_up_every_hour(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_index_dispatch_uses_date_key_and_skips_before_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(catch_up, "index_job", Mock())
+    catch_up.dispatch_index(datetime(2026, 11, 12, 16, tzinfo=workflow.SYDNEY))
+    catch_up.index_job.run.assert_not_called()
+    catch_up.dispatch_index(datetime(2026, 11, 12, 17, tzinfo=workflow.SYDNEY))
+    assert catch_up.index_job.run.call_args.kwargs == {
+        "input": catch_up.IndexInput(date="2026-11-12"),
+        "wait_for_result": False,
+    }
+
+
+def test_scheduler_runs_catch_up_every_15_minutes(monkeypatch: pytest.MonkeyPatch) -> None:
     callbacks = {}
     client = Mock()
 
@@ -137,7 +154,7 @@ def test_scheduler_runs_catch_up_every_hour(monkeypatch: pytest.MonkeyPatch) -> 
         ),
         (
             datetime(2026, 7, 6, 17, 10, tzinfo=workflow.SYDNEY),
-            ["vea-crude-evaluate", "asx-200-profile-capture"],
+            ["vea-crude-evaluate", "asx-200-profile-capture", "asx-200-index-capture"],
         ),
         (
             datetime(2026, 11, 12, 17, tzinfo=workflow.SYDNEY),
@@ -149,15 +166,15 @@ def test_scheduler_runs_catch_up_every_hour(monkeypatch: pytest.MonkeyPatch) -> 
         ),
         (
             datetime(2026, 11, 12, 18, 10, tzinfo=workflow.SYDNEY),
-            ["vea-crude-evaluate", "asx-200-profile-capture"],
+            ["vea-crude-evaluate", "asx-200-profile-capture", "asx-200-index-capture"],
         ),
         (
             datetime(2026, 11, 12, 20, tzinfo=workflow.SYDNEY),
-            ["vea-crude-evaluate", "asx-200-profile-capture"],
+            ["vea-crude-evaluate", "asx-200-profile-capture", "asx-200-index-capture"],
         ),
         (
             datetime(2026, 11, 12, 20, 10, tzinfo=workflow.SYDNEY),
-            ["vea-crude-evaluate", "asx-200-profile-capture"],
+            ["vea-crude-evaluate", "asx-200-profile-capture", "asx-200-index-capture"],
         ),
     ],
 )
@@ -265,6 +282,30 @@ def test_run_audit_retries_failed_run_even_with_matching_input() -> None:
     assert not catch_up._has_success_or_active_run(
         client, "asx-200-profile-capture", date(2026, 11, 12), due, due.replace(hour=8)
     )
+
+
+def test_index_catch_up_is_independent_of_successful_profile_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    due = datetime(2026, 11, 12, 7, tzinfo=UTC)
+    client = Mock()
+    client.runs.list.return_value.rows = [
+        _run(
+            "asx-200-profile-capture",
+            V1TaskStatus.COMPLETED,
+            due,
+            output={"target": "2026-11-12"},
+        ),
+        _run("asx-200-index-capture", V1TaskStatus.FAILED, due, payload={"date": "2026-11-12"}),
+    ]
+    monkeypatch.setattr(catch_up, "job", Mock())
+    monkeypatch.setattr(catch_up, "asx_200_job", Mock())
+    monkeypatch.setattr(catch_up, "index_job", Mock())
+    catch_up.run_catch_up(client, datetime(2026, 11, 12, 18, 10, tzinfo=workflow.SYDNEY))
+    catch_up.index_job.run.assert_called_once_with(
+        input=catch_up.IndexInput(date="2026-11-12"), wait_for_result=False
+    )
+    catch_up.asx_200_job.run.assert_not_called()
 
 
 def test_telegram_rejection_and_success(monkeypatch: pytest.MonkeyPatch) -> None:
