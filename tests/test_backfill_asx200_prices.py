@@ -30,13 +30,39 @@ def test_fetch_all_prices_requests_max_history_without_profile(
     monkeypatch.setattr(yfinance_provider.yf, "Ticker", factory)
     session = Mock()
 
-    bars = YFinanceProvider().fetch_all_daily_prices(AsxTicker.parse("QAN"), session=session)
+    bars, malformed = YFinanceProvider().fetch_all_daily_prices(
+        AsxTicker.parse("QAN"), session=session
+    )
 
     factory.assert_called_once_with("QAN.AX", session=session)
     yahoo_ticker.history.assert_called_once_with(interval="1d", auto_adjust=False, period="max")
     yahoo_ticker.get_info.assert_not_called()
     assert bars[0].trading_date == date(1995, 7, 31)
     assert bars[0].volume == 100
+    assert malformed == []
+
+
+def test_fetch_all_prices_reports_malformed_rows_and_keeps_valid_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticker = Mock()
+    ticker.history.return_value = pd.DataFrame(
+        {
+            "Open": [1.0, None],
+            "High": [1.2, 1.2],
+            "Low": [0.9, 0.9],
+            "Close": [1.1, 1.1],
+            "Volume": [100, 100],
+        },
+        index=pd.DatetimeIndex(["1995-07-31", "1995-08-01"], tz="Australia/Sydney"),
+    )
+    monkeypatch.setattr(yfinance_provider.yf, "Ticker", lambda *args, **kwargs: ticker)
+
+    bars, malformed = YFinanceProvider().fetch_all_daily_prices(AsxTicker.parse("QAN"))
+
+    assert [bar.trading_date for bar in bars] == [date(1995, 7, 31)]
+    assert len(malformed) == 1
+    assert "Missing OHLC price" in malformed[0]
 
 
 def test_fetch_all_prices_rejects_empty_response(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -44,6 +70,20 @@ def test_fetch_all_prices_rejects_empty_response(monkeypatch: pytest.MonkeyPatch
     ticker.history.return_value = pd.DataFrame()
     monkeypatch.setattr(yfinance_provider.yf, "Ticker", lambda *args, **kwargs: ticker)
     with pytest.raises(ValueError, match="Price history was empty"):
+        YFinanceProvider().fetch_all_daily_prices(AsxTicker.parse("QAN"))
+
+
+def test_fetch_all_prices_rejects_wholly_malformed_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticker = Mock()
+    ticker.history.return_value = pd.DataFrame(
+        {"Open": [None], "High": [1.2], "Low": [0.9], "Close": [1.1], "Volume": [100]},
+        index=pd.DatetimeIndex(["1995-07-31"], tz="Australia/Sydney"),
+    )
+    monkeypatch.setattr(yfinance_provider.yf, "Ticker", lambda *args, **kwargs: ticker)
+
+    with pytest.raises(ValueError, match="Missing OHLC price"):
         YFinanceProvider().fetch_all_daily_prices(AsxTicker.parse("QAN"))
 
 
@@ -77,7 +117,10 @@ def test_backfill_resumes_only_incomplete_tickers(
     monkeypatch.setattr(backfill, "read_progress", lambda path: (set(symbols[1:]), None))
     monkeypatch.setattr(backfill, "PacedSession", MagicMock())
     provider = Mock()
-    provider.fetch_all_daily_prices.return_value = [Mock(trading_date=date(1995, 7, 31))]
+    provider.fetch_all_daily_prices.return_value = (
+        [Mock(trading_date=date(1995, 7, 31))],
+        ["Skipped malformed price row: Missing OHLC price"],
+    )
     monkeypatch.setattr(backfill, "YFinanceProvider", lambda: provider)
     monkeypatch.setattr(backfill, "save_bars", lambda engine, ticker, bars: 1)
     progress = tmp_path / "progress.jsonl"
@@ -87,6 +130,10 @@ def test_backfill_resumes_only_incomplete_tickers(
     provider.fetch_all_daily_prices.assert_called_once()
     assert provider.fetch_all_daily_prices.call_args.args[0].value == "QAN"
     assert '"status": "succeeded"' in progress.read_text()
+    assert (
+        '"skipped_rows": ["Skipped malformed price row: Missing OHLC price"]'
+        in progress.read_text()
+    )
 
 
 def test_rate_limit_stops_backfill_without_marking_success(

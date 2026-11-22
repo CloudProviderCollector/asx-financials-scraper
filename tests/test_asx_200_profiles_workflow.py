@@ -11,9 +11,11 @@ from workflows import asx_200_profiles_workflow as workflow
 
 def test_roster_is_resolved_from_repository_root() -> None:
     assert workflow.ROSTER.is_file()
+    assert workflow.ROSTER.name == "asx200_20261122.csv"
     tickers = workflow.load_tickers(workflow.ROSTER)
     assert len(tickers) == 200
-    assert {"ASK", "IFL", "NSR", "XYX"} <= set(tickers)
+    assert {"BJY", "DVP", "XYZ"} <= set(tickers)
+    assert {"ASK", "IFL", "NSR", "QUB", "XYX"}.isdisjoint(tickers)
 
 
 class AfterClose(datetime):

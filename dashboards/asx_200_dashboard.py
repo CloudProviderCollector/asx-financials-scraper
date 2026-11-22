@@ -19,7 +19,7 @@ from asx_financials.infrastructure.persistence.schema import (
     raw_source_payloads,
 )
 
-ROSTER = Path(__file__).resolve().parents[1] / "data" / "asx200" / "asx200_20260405.csv"
+ROSTER = Path(__file__).resolve().parents[1] / "data" / "asx200" / "asx200_20261122.csv"
 SYDNEY = ZoneInfo("Australia/Sydney")
 
 

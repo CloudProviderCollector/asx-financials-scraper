@@ -20,6 +20,9 @@ def test_dated_roster_contains_200_unique_tickers() -> None:
     roster = dashboard.load_roster()
     assert len(roster) == 200
     assert roster["BHP"]["name"]
+    assert dashboard.ROSTER.name == "asx200_20261122.csv"
+    assert roster["BJY"]["source"] == "stw_holdings_20261120"
+    assert roster["DVP"]["source"] == "stw_holdings_20261120"
 
 
 def test_loads_stored_index_closes_in_date_order() -> None:

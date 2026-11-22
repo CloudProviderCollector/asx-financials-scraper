@@ -206,20 +206,30 @@ class YFinanceProvider:
             raise ValueError(f"{ticker.value}: no daily price and volume for {trading_date}")
         return matching[0]
 
-    def fetch_all_daily_prices(self, ticker: AsxTicker, session: Any = None) -> list[DailyPriceBar]:
-        """Fetch all available daily OHLCV bars without fetching profiles or statements."""
+    def fetch_all_daily_prices(
+        self, ticker: AsxTicker, session: Any = None
+    ) -> tuple[list[DailyPriceBar], list[str]]:
+        """Fetch valid daily OHLCV bars and report malformed rows without fetching profiles."""
         failures: list[SegmentFailure] = []
         bars = self._fetch_price_history(
             yf.Ticker(ticker.yahoo_symbol, session=session), None, _utcnow(), failures
         )
-        if failures:
+        malformed = [
+            failure.reason
+            for failure in failures
+            if failure.reason.startswith("Skipped malformed price row:")
+        ]
+        other_failures = [
+            failure.reason
+            for failure in failures
+            if not failure.reason.startswith("Skipped malformed price row:")
+        ]
+        if other_failures or not bars:
             raise ValueError(
                 f"{ticker.value}: price history failed: "
                 + "; ".join(failure.reason for failure in failures)
             )
-        if not bars:
-            raise ValueError(f"{ticker.value}: Yahoo returned no daily prices")
-        return bars
+        return bars, malformed
 
     def fetch(
         self,
@@ -421,7 +431,9 @@ class YFinanceProvider:
                     )
                 except (ValueError, TypeError, InvalidOperation, OverflowError) as exc:
                     failures.append(
-                        SegmentFailure(PRICE_HISTORY_SEGMENT, f"Skipped malformed price row: {exc}")
+                        SegmentFailure(
+                            PRICE_HISTORY_SEGMENT, f"Skipped malformed price row: {index}: {exc}"
+                        )
                     )
             if not bars and latest_price_date is None and not failures:
                 failures.append(SegmentFailure(PRICE_HISTORY_SEGMENT, "No valid price bars."))

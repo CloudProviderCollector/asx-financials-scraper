@@ -92,7 +92,7 @@ def backfill(engine: Engine, progress: Path, interval: int = 60) -> None:
             record(progress, {"event": "start", "ticker": symbol, "time": last_start.isoformat()})
             try:
                 ticker = AsxTicker.parse(symbol)
-                bars = provider.fetch_all_daily_prices(ticker, session=session)
+                bars, malformed = provider.fetch_all_daily_prices(ticker, session=session)
                 inserted = save_bars(engine, ticker, bars)
             except Exception as exc:
                 record(
@@ -123,11 +123,13 @@ def backfill(engine: Engine, progress: Path, interval: int = 60) -> None:
                     "prices": len(bars),
                     "inserted": inserted,
                     "earliest": min(bar.trading_date for bar in bars).isoformat(),
+                    "skipped_rows": malformed,
                 },
             )
             print(
                 f"[{index}/{len(remaining)}] {symbol}: {len(bars)} bars, "
-                f"{inserted} inserted, earliest {min(bar.trading_date for bar in bars)}",
+                f"{inserted} inserted, earliest {min(bar.trading_date for bar in bars)}, "
+                f"{len(malformed)} malformed rows skipped",
                 flush=True,
             )
     if errors:

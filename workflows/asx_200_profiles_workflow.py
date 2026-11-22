@@ -27,7 +27,7 @@ from asx_financials.ingest_ticker_csv import load_tickers
 LOGGER = logging.getLogger(__name__)
 SYDNEY = ZoneInfo("Australia/Sydney")
 CALENDAR = xcals.get_calendar("XASX")
-ROSTER = Path(__file__).resolve().parents[1] / "data" / "asx200" / "asx200_20260405.csv"
+ROSTER = Path(__file__).resolve().parents[1] / "data" / "asx200" / "asx200_20261122.csv"
 LOCK_ID = 992637412
 INTERVAL_SECONDS = 10
 
