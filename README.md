@@ -53,6 +53,82 @@ The first ingest fetches all available Yahoo daily OHLCV history, including adju
 
 To backfill **only** daily OHLCV for the fixed 200-stock roster in `data\asx200\asx200_20261122.csv`, including dates before any previously stored bars, run `uv run python -m asx_financials.backfill_asx200_prices --progress C:\path\to\asx200-prices.jsonl`. It requests Yahoo's maximum available daily history for each ticker, inserts missing dates without changing existing rows, and leaves profiles and statements untouched. It starts tickers at least 60 seconds apart and paces Yahoo HTTP requests at least 10 seconds apart. Reuse the same progress file to resume after interruption; failed tickers remain eligible for retry. Malformed individual Yahoo bars are skipped and recorded in the progress file while valid history is retained; empty or wholly invalid history still fails. A rate-limit error stops the batch, and other ticker failures are reported after processing the rest of the roster. This roster is a dated TradingView snapshot supplemented by two ETF holdings, not an officially verified current or historical index list.
 
+## Daily trend-following backtest
+
+Run the read-only, long-only backtester against stored ASX daily prices (first ingest or
+backfill the requested tickers). Alternatively use `--source yahoo` to download public
+history without writing to PostgreSQL:
+
+```powershell
+uv run python -m backtest --tickers BHP CBA --start 2015-01-01 --equity-csv equity.csv --trades-csv trades.csv
+uv run python -m backtest --source yahoo --tickers BHP CBA --start 2015-01-01 --chart-html trades.html
+```
+
+The default `moving-average` strategy buys only when the 20-session simple
+moving average crosses strictly above the 65-session simple moving average
+(below on the prior close, above on the current close). It sells whenever the
+current close is strictly below the 5-session moving average, even if it was
+already below on the prior day. Touching or starting from equality does not
+count as an entry cross. The earlier 100-session breakout/200-session trend
+filter with a 50-session low or ATR trailing-stop exit is available with
+`--strategy breakout`.
+All decisions use data available at that close; orders fill
+at the next available trading open (not intraday). Historical bars before
+`--start` warm up the indicators. By default the run excludes the current ASX
+calendar day to avoid incomplete sessions; `--end` sets an explicit last date.
+Pending orders at the end do not fill.
+
+`--chart-html` writes a standalone interactive graph with each requested ticker's
+adjusted daily close, green buy and red sell markers at executed adjusted opening
+fills, and portfolio equity. For the default strategy, each ticker's price panel
+also shows its 5-, 20-, and 65-session simple moving averages, warmed up using
+history before `--start`. It includes executed entries for positions still open;
+unfilled terminal signals are not plotted.
+
+To compare and retain every strategy version tried, run:
+
+```powershell
+uv run python -m backtest --source yahoo --tickers BHP CBA --start 2015-01-02 --end 2026-11-20 --record-all
+uv run streamlit run dashboards\backtest_dashboard.py
+```
+
+The dashboard can also run and record all versions from Yahoo or PostgreSQL.
+Choose a saved run to compare final equity, return, drawdown, and trades, then
+review each strategy's rules, parameters, and interactive price, moving-average,
+trade, and equity graphs. The breakout graph overlays its 200-session trend
+average; the MA strategies overlay the averages used in their rules. The five
+versions are `breakout` (100-session high and 200-session
+trend filter), `ma-state` (20/65 state entry, 5/20 state exit),
+`ma-cross-10` (20/65 crossing entry, 10/20 crossing exit),
+`ma-cross-5` (20/65 crossing entry, 5/20 crossing exit), and
+`moving-average` (20/65 crossing entry, close below 5-session average exit).
+Each saved set under `backtest\records` contains the exact adjusted input
+bars, one result per version, and a manifest with rules, parameters, settings,
+source, dates, and metrics. These local files are ignored by Git; copy them
+elsewhere to preserve them across worktree removal. Earlier rules are rerun
+on the *same current price snapshot*, not recovered historical Yahoo results.
+
+The shared runner in `backtest\engine.py` takes daily bars and a strategy that
+implements `signal` and `trailing_distance`; `backtest\trend.py` supplies both
+strategies. It starts with AUD 100,000, sizes entries at 0.5% of equity divided
+by three times the 20-session ATR (not a guaranteed risk limit for the
+moving-average strategy, which has no stop-loss exit), limits a stock to 10%
+and a sector to 25% of equity, and charges AUD 10 commission plus 5 basis points
+of adverse slippage per fill.
+It reports marked-to-market equity, maximum drawdown and realized trades;
+unclosed positions remain in final equity. Prices use adjusted-close/close to
+scale each day's OHLC into a total-return proxy. These adjusted prices are
+synthetic (not executable quotes); the model does not explicitly settle
+dividends or reconstruct split-adjusted share counts. Yahoo runs have no
+historical sector data, so each ticker has its own sector bucket. PostgreSQL
+uses the *current* stored sector, not a point-in-time sector. Incomplete or
+inconsistent stored daily OHLCV/adjusted closes fail the run. Inconsistent
+Yahoo OHLCV/adjusted bars are reported on stderr and skipped, while Yahoo
+provider parse failures abort the run; gaps are not filled with invented prices.
+No historical point-in-time membership is available: choosing today's roster
+for an old period creates survivorship bias. This is a research backtest, not
+an investable return estimate.
+
 ## ASX gold miners vs gold futures
 
 Apply migrations (`uv run alembic upgrade head`), then run `uv run python -m asx_financials.download_exchange_rates` to backfill the longest Yahoo `AUDUSD=X` daily close history into PostgreSQL `exchange_rates`. The rate is **USD per AUD**; reruns update revised values. Run `uv run streamlit run dashboards\gold_miners_dashboard.py` as a standalone dashboard. The four upper charts compare stored NST, EVN, NEM, and PRU daily ASX closing share prices (AUD/share, left axis) against Yahoo `GC=F` COMEX gold futures closes converted to AUD/troy ounce (right axis). The AUD gold price is calculated on read as the USD gold close divided by the same-date AUD/USD rate; it is not separately stored. The available FX history begins in May 2006, so earlier gold closes and dates without matching rates are excluded, never forward-filled. Below each upper chart, ordinary least squares fits the stock close to the converted gold close on matching dates only and plots actual and estimated share prices. A further graph for each stock fits and plots actual and estimated closes over the last ten calendar years ending on that stock's latest matching close, or all available matched closes if shorter. The page shows the slope, intercept, sum of squared errors (SSE), mean squared error (MSE), root mean squared error (RMSE, in AUD/share), and number of matched observations for both fits; the full-history fit also shows RMSE divided by the latest available stock close (as a ratio and percentage, with the close date). The estimates are in-sample, not forecasts. These are unadjusted share closes and rolling futures prices, not gold spot prices. The dashboard reads PostgreSQL only; ingest each stock and download the `GC=F` commodity series and AUD/USD history first.

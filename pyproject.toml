@@ -40,12 +40,12 @@ dev = [
 asx-financials = "asx_financials.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/asx_financials", "dashboards", "workflows"]
+packages = ["src/asx_financials", "dashboards", "workflows", "backtest"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-src = ["src", "dashboards", "workflows", "tests"]
+src = ["src", "dashboards", "workflows", "backtest", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "N", "ASYNC", "RUF"]
@@ -64,7 +64,7 @@ disallow_untyped_defs = false
 ignore_missing_imports = true
 disable_error_code = ["attr-defined", "no-any-return"]
 warn_unused_configs = true
-packages = ["asx_financials", "dashboards", "workflows"]
+packages = ["asx_financials", "dashboards", "workflows", "backtest"]
 
 [tool.coverage.run]
 source = ["src/asx_financials", "dashboards", "workflows"]
